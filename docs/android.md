@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-Android 客户端通过 broker WebSocket 与 backend worker 通信，界面呈现为聊天窗口。用户只需要配置 broker URL/token，然后从 worker 上报的 work dir 白名单中选择运行位置，并选择“继续现有 session”或“在该 work dir 新建 session”。
+Android 客户端通过 broker WebSocket 与 backend worker 通信。UI 分为连接配置页和聊天页：用户先在连接配置页填写 broker URL/token，再从 worker 上报的 work dir 白名单中选择运行位置，并选择“继续现有 session”或“在该 work dir 新建 session”；进入聊天页后只显示聊天内容、状态和输入框。
 
 Agent 输出以流式 `agent.delta` 实时追加到 assistant 气泡中，并按 Markdown 渲染；`agent.final` 到达后用完整 Markdown 内容校正气泡。如果 final 返回 `reportPath`，客户端会通过 broker 请求 backend report workspace 中的文件并显示。
 
@@ -64,6 +64,8 @@ android\app\build\outputs\apk\debug\app-debug.apk
 3. 收到 `agent.delta` 时实时追加并刷新 Markdown。
 4. 收到 `agent.final` 时用完整 Markdown 覆盖校正。
 5. 如存在 `reportPath`，自动发送 `report.read` 并显示 `report.content`。
+
+聊天页提供 **Exit to connection settings**，用于断开当前 WebSocket、清空当前聊天状态并返回连接配置页，从而重新连接 broker 或重新选择 worker/work dir/session action。
 
 ## 5. Emulator 测试
 

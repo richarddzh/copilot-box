@@ -57,6 +57,7 @@ Android Client
 7. Android client 必须呈现为聊天界面：用户消息显示在右侧/本端气泡，agent 消息显示在左侧/远端气泡，并在收到流式 delta 时原地追加内容。
 8. 每个 backend worker 首版只允许一个活跃 session/request；新的 request 在已有 request 运行时会被 broker 或 worker 拒绝为 `worker_busy`。
 9. Client 对 agent 响应按 Markdown 渲染；流式过程中持续追加并刷新 Markdown，`agent.final` 到达后用完整 Markdown 内容覆盖校正。
+10. Android UI 分为连接配置页和聊天页；聊天页不显示连接配置，并提供退出回连接配置页以重新开始。
 
 ## 3. 运行形态
 
@@ -592,13 +593,14 @@ Android 聊天 UI：
 
 | 元素 | 说明 |
 | --- | --- |
-| 顶部设置区 | Broker URL、token、worker 下拉、work dir 下拉、session action |
+| 连接配置页 | Broker URL、token、worker 下拉、work dir 下拉、session action |
 | 消息列表 | 纵向滚动的聊天气泡 |
 | 用户气泡 | 点击发送后立即追加，显示用户 prompt |
 | Agent 气泡 | 收到 `broker.accepted` 后创建占位，收到 `agent.delta` 时实时 append |
 | Markdown 渲染 | Agent 气泡按 Markdown 显示，支持标题、列表、代码块、链接等常见语法 |
 | 状态文本 | 显示 connected/running/failed/succeeded |
 | 输入框 | 多行 prompt，底部发送按钮 |
+| 退出按钮 | 断开当前 WebSocket，清空当前聊天状态，返回连接配置页重新开始 |
 
 ## 12. 错误处理与状态
 

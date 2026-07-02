@@ -28,20 +28,26 @@ class MainActivity : Activity(), BrokerClient.Listener {
     private lateinit var workerSpinner: Spinner
     private lateinit var workDirSpinner: Spinner
     private lateinit var sessionActionSpinner: Spinner
+    private lateinit var configStatus: TextView
+    private lateinit var startChatButton: Button
+
     private lateinit var prompt: EditText
-    private lateinit var status: TextView
+    private lateinit var chatStatus: TextView
     private lateinit var messages: LinearLayout
     private lateinit var scrollView: ScrollView
 
     private var brokerClient: BrokerClient? = null
     private var workers: List<BrokerWorker> = emptyList()
+    private var selectedWorkerId: String? = null
+    private var selectedWorkDir: String? = null
+    private var selectedSessionMode: String = "auto"
     private var lastRequestWorkerId: String? = null
     private var currentAssistantBubble: TextView? = null
     private val currentAssistantMarkdown = StringBuilder()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(buildContentView())
+        showConnectionView()
     }
 
     override fun onDestroy() {
@@ -49,10 +55,18 @@ class MainActivity : Activity(), BrokerClient.Listener {
         super.onDestroy()
     }
 
-    private fun buildContentView(): LinearLayout {
-        val root = LinearLayout(this).apply {
+    private fun showConnectionView() {
+        setContentView(buildConnectionView())
+    }
+
+    private fun showChatView() {
+        setContentView(buildChatView())
+    }
+
+    private fun buildConnectionView(): ScrollView {
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
+            setPadding(32, 32, 32, 32)
         }
         brokerUrl = input(
             "Broker WebSocket URL",
@@ -75,15 +89,41 @@ class MainActivity : Activity(), BrokerClient.Listener {
                 listOf("继续现有 session", "在该 work dir 新建 session"),
             )
         }
-        prompt = input(
-            "Message",
-            "输入 prompt，支持要求 agent 返回 Markdown",
-            preferences.getString("prompt", "请用 Markdown 总结当前项目").orEmpty(),
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
-            minLines = 3,
-        )
-        status = TextView(this).apply {
+        configStatus = TextView(this).apply {
             text = "Disconnected"
+            textSize = 14f
+            setPadding(0, 16, 0, 16)
+        }
+        startChatButton = Button(this).apply {
+            text = "Start chat"
+            isEnabled = false
+            setOnClickListener { startChat() }
+        }
+        val connectButton = Button(this).apply {
+            text = "Connect"
+            setOnClickListener { connectBroker() }
+        }
+
+        container.addView(title("Connection"))
+        addField(container, "Broker WebSocket URL", brokerUrl)
+        addField(container, "Client token", brokerToken)
+        container.addView(connectButton)
+        container.addView(configStatus)
+        container.addView(title("Session target"))
+        addSpinner(container, "Worker", workerSpinner)
+        addSpinner(container, "Work dir", workDirSpinner)
+        addSpinner(container, "Session", sessionActionSpinner)
+        container.addView(startChatButton)
+        return ScrollView(this).apply { addView(container) }
+    }
+
+    private fun buildChatView(): LinearLayout {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 24, 24, 24)
+        }
+        chatStatus = TextView(this).apply {
+            text = "Ready"
             textSize = 14f
         }
         messages = LinearLayout(this).apply {
@@ -97,32 +137,47 @@ class MainActivity : Activity(), BrokerClient.Listener {
                 1f,
             )
         }
-
-        val connectButton = Button(this).apply {
-            text = "Connect"
-            setOnClickListener { connectBroker() }
+        prompt = input(
+            "Message",
+            "输入 prompt，支持要求 agent 返回 Markdown",
+            preferences.getString("prompt", "请用 Markdown 总结当前项目").orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
+            minLines = 3,
+        )
+        val switchButton = Button(this).apply {
+            text = "Exit to connection settings"
+            setOnClickListener { exitToConnectionSettings() }
         }
         val sendButton = Button(this).apply {
             text = "Send"
             setOnClickListener { sendPrompt() }
         }
 
-        addField(root, "Broker WebSocket URL", brokerUrl)
-        addField(root, "Client token", brokerToken)
-        root.addView(connectButton)
-        addSpinner(root, "Worker", workerSpinner)
-        addSpinner(root, "Work dir", workDirSpinner)
-        addSpinner(root, "Session", sessionActionSpinner)
-        root.addView(status)
+        root.addView(title("Copilot Box"))
+        root.addView(chatStatus)
         root.addView(scrollView)
         addField(root, "Message", prompt)
         root.addView(sendButton)
+        root.addView(switchButton)
         return root
     }
 
+    private fun exitToConnectionSettings() {
+        brokerClient?.close()
+        brokerClient = null
+        workers = emptyList()
+        selectedWorkerId = null
+        selectedWorkDir = null
+        selectedSessionMode = "auto"
+        lastRequestWorkerId = null
+        currentAssistantBubble = null
+        currentAssistantMarkdown.clear()
+        showConnectionView()
+    }
+
     private fun connectBroker() {
-        persistInputs()
-        status.text = "Connecting..."
+        persistConnectionInputs()
+        configStatus.text = "Connecting..."
         brokerClient?.close()
         brokerClient = BrokerClient(
             brokerUrl = brokerUrl.text.toString(),
@@ -131,51 +186,76 @@ class MainActivity : Activity(), BrokerClient.Listener {
         ).also { it.connect() }
     }
 
+    private fun startChat() {
+        val worker = selectedWorker() ?: run {
+            configStatus.text = "No worker connected"
+            return
+        }
+        val workDir = workDirSpinner.selectedItem?.toString().orEmpty()
+        if (workDir.isBlank()) {
+            configStatus.text = "No work dir selected"
+            return
+        }
+        selectedWorkerId = worker.workerId
+        selectedWorkDir = workDir
+        selectedSessionMode = if (sessionActionSpinner.selectedItemPosition == 1) "new" else "auto"
+        currentAssistantBubble = null
+        currentAssistantMarkdown.clear()
+        showChatView()
+    }
+
     private fun sendPrompt() {
         val selectedPrompt = prompt.text.toString()
         if (selectedPrompt.isBlank()) {
             return
         }
-        val worker = selectedWorker() ?: run {
-            status.text = "No worker connected"
+        val workerId = selectedWorkerId ?: run {
+            chatStatus.text = "No worker selected"
             return
         }
-        val workDir = workDirSpinner.selectedItem?.toString().orEmpty()
-        if (workDir.isBlank()) {
-            status.text = "No work dir selected"
+        val workDir = selectedWorkDir ?: run {
+            chatStatus.text = "No work dir selected"
             return
         }
-        persistInputs()
+        persistPromptInput()
         addUserBubble(selectedPrompt)
         currentAssistantMarkdown.clear()
         currentAssistantBubble = addAssistantBubble("...")
-        val sessionMode = if (sessionActionSpinner.selectedItemPosition == 1) "new" else "auto"
         try {
-            lastRequestWorkerId = worker.workerId
-            brokerClient?.sendPrompt(worker.workerId, workDir, sessionMode, selectedPrompt)
-            status.text = "Running..."
+            lastRequestWorkerId = workerId
+            brokerClient?.sendPrompt(workerId, workDir, selectedSessionMode, selectedPrompt)
+            chatStatus.text = "Running..."
             prompt.setText("")
         } catch (exc: Exception) {
-            status.text = exc.message ?: "Send failed"
+            chatStatus.text = exc.message ?: "Send failed"
         }
     }
 
     override fun onConnected(workers: List<BrokerWorker>) {
         mainHandler.post {
             this.workers = workers
-            status.text = if (workers.isEmpty()) "Connected: no workers" else "Connected"
-            workerSpinner.adapter = ArrayAdapter(
-                this,
-                android.R.layout.simple_spinner_dropdown_item,
-                workers,
-            )
-            updateWorkDirs()
-            workerSpinner.setOnItemSelectedListener(SimpleItemSelectedListener { updateWorkDirs() })
+            if (::configStatus.isInitialized) {
+                configStatus.text = if (workers.isEmpty()) "Connected: no workers" else "Connected"
+                startChatButton.isEnabled = workers.isNotEmpty()
+                workerSpinner.adapter = ArrayAdapter(
+                    this,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    workers,
+                )
+                updateWorkDirs()
+                workerSpinner.setOnItemSelectedListener(
+                    SimpleItemSelectedListener { updateWorkDirs() },
+                )
+            }
         }
     }
 
     override fun onAccepted(requestId: String) {
-        mainHandler.post { status.text = "Accepted: $requestId" }
+        mainHandler.post {
+            if (::chatStatus.isInitialized) {
+                chatStatus.text = "Accepted: $requestId"
+            }
+        }
     }
 
     override fun onDelta(requestId: String, sequence: Int, text: String) {
@@ -190,11 +270,11 @@ class MainActivity : Activity(), BrokerClient.Listener {
             currentAssistantMarkdown.clear()
             currentAssistantMarkdown.append(final.output)
             renderAssistantMarkdown(final.output)
-            status.text = "${final.status}: ${final.sessionId.orEmpty()}"
+            chatStatus.text = "${final.status}: ${final.sessionId.orEmpty()}"
             val reportPath = final.reportPath
             val workerId = lastRequestWorkerId
             if (!reportPath.isNullOrBlank() && !workerId.isNullOrBlank()) {
-                status.text = "Loading report: $reportPath"
+                chatStatus.text = "Loading report"
                 brokerClient?.readReport(workerId, reportPath)
             }
         }
@@ -206,23 +286,38 @@ class MainActivity : Activity(), BrokerClient.Listener {
             currentAssistantMarkdown.clear()
             currentAssistantMarkdown.append(title).append(report.content)
             renderAssistantMarkdown(currentAssistantMarkdown.toString())
-            status.text = "Report loaded"
+            chatStatus.text = "Report loaded"
         }
     }
 
     override fun onError(requestId: String?, error: BrokerError) {
         mainHandler.post {
+            if (!::messages.isInitialized) {
+                if (::configStatus.isInitialized) {
+                    configStatus.text = "Failed: ${error.code}"
+                }
+                return@post
+            }
             val bubble = currentAssistantBubble ?: addAssistantBubble("")
             currentAssistantBubble = bubble
             currentAssistantMarkdown.clear()
             currentAssistantMarkdown.append("**Error `${error.code}`**\n\n${error.message}")
             renderAssistantMarkdown(currentAssistantMarkdown.toString())
-            status.text = "Failed: ${error.code}"
+            chatStatus.text = "Failed: ${error.code}"
         }
     }
 
     override fun onClosed(reason: String) {
-        mainHandler.post { status.text = "Disconnected: $reason" }
+        mainHandler.post {
+            val text = "Disconnected: $reason"
+            if (::chatStatus.isInitialized) {
+                chatStatus.text = text
+            }
+            if (::configStatus.isInitialized) {
+                configStatus.text = text
+                startChatButton.isEnabled = false
+            }
+        }
     }
 
     private fun updateWorkDirs() {
@@ -286,6 +381,13 @@ class MainActivity : Activity(), BrokerClient.Listener {
         container.addView(spinner)
     }
 
+    private fun title(text: String): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = 20f
+            setPadding(0, 16, 0, 12)
+        }
+
     private fun input(
         label: String,
         hint: String,
@@ -312,10 +414,15 @@ class MainActivity : Activity(), BrokerClient.Listener {
             )
         }
 
-    private fun persistInputs() {
+    private fun persistConnectionInputs() {
         preferences.edit()
             .putString("brokerUrl", brokerUrl.text.toString())
             .putString("brokerToken", brokerToken.text.toString())
+            .apply()
+    }
+
+    private fun persistPromptInput() {
+        preferences.edit()
             .putString("prompt", prompt.text.toString())
             .apply()
     }
