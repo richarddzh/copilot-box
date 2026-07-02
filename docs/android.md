@@ -134,7 +134,7 @@ Android 客户端当前使用 **container SAS URL** 访问 Storage Account。客
 $expiry = (Get-Date).ToUniversalTime().AddHours(1).ToString("yyyy-MM-ddTHH:mmZ")
 
 az storage container generate-sas `
-  --account-name zhdonsg `
+  --account-name <storage-account> `
   --name requests `
   --permissions cw `
   --expiry $expiry `
@@ -147,7 +147,7 @@ az storage container generate-sas `
 
 ```powershell
 az storage container generate-sas `
-  --account-name zhdonsg `
+  --account-name <storage-account> `
   --name responses `
   --permissions rl `
   --expiry $expiry `
@@ -159,8 +159,8 @@ az storage container generate-sas `
 拼接成完整 URL 后填入 Android app：
 
 ```text
-https://zhdonsg.blob.core.windows.net/requests?<sas-token>
-https://zhdonsg.blob.core.windows.net/responses?<sas-token>
+https://<storage-account>.blob.core.windows.net/requests?<sas-token>
+https://<storage-account>.blob.core.windows.net/responses?<sas-token>
 ```
 
 ## 7. 生成测试 SAS
@@ -173,8 +173,8 @@ https://zhdonsg.blob.core.windows.net/responses?<sas-token>
 示例 URL 形态：
 
 ```text
-https://zhdonsg.blob.core.windows.net/requests?<sas-token>
-https://zhdonsg.blob.core.windows.net/responses?<sas-token>
+https://<storage-account>.blob.core.windows.net/requests?<sas-token>
+https://<storage-account>.blob.core.windows.net/responses?<sas-token>
 ```
 
 > 不要把长期 SAS、account key 或其他秘密提交到 Git。客户端 UI 会把输入保存在 Android 本机 SharedPreferences 中，仅用于本地测试便利。
@@ -185,8 +185,8 @@ https://zhdonsg.blob.core.windows.net/responses?<sas-token>
 
 | 字段 | 示例 | 说明 |
 | --- | --- | --- |
-| Requests container SAS URL | `https://zhdonsg.blob.core.windows.net/requests?...` | 用于上传 request blob |
-| Responses container SAS URL | `https://zhdonsg.blob.core.windows.net/responses?...` | 用于 list/download response blob |
+| Requests container SAS URL | `https://<storage-account>.blob.core.windows.net/requests?...` | 用于上传 request blob |
+| Responses container SAS URL | `https://<storage-account>.blob.core.windows.net/responses?...` | 用于 list/download response blob |
 | Request prefix | `manual-test/android/` | request blob 前缀；服务端 `storage.request_prefix` 需要匹配或为空 |
 | Remote work dir | `Q:\gitroot\copilot-box` | Windows service 所在机器上的工作目录 |
 | Session mode | `auto`、`new` 或 `continue` | 对应服务端 session 策略 |
@@ -206,7 +206,7 @@ https://zhdonsg.blob.core.windows.net/responses?<sas-token>
 
 ```toml
 [storage]
-account_url = "https://zhdonsg.blob.core.windows.net"
+account_url = "https://<storage-account>.blob.core.windows.net"
 request_container = "requests"
 response_container = "responses"
 dead_letter_container = "dead-letter"
