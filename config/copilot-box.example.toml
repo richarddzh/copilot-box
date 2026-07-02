@@ -3,7 +3,9 @@ account_url = "https://<account>.blob.core.windows.net"
 request_container = "requests"
 response_container = "responses"
 dead_letter_container = "dead-letter"
+request_prefix = ""
 poll_interval_seconds = 5
+max_requests_per_poll = 10
 
 [identity]
 mode = "managed_identity"

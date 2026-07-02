@@ -7,6 +7,17 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class StorageSettings:
+    account_url: str
+    request_container: str = "requests"
+    response_container: str = "responses"
+    dead_letter_container: str = "dead-letter"
+    request_prefix: str = ""
+    poll_interval_seconds: float = 5
+    max_requests_per_poll: int = 10
+
+
+@dataclass(frozen=True)
 class SessionSettings:
     state_dir: Path
     ttl_seconds: int = 86400
@@ -29,6 +40,7 @@ class AgentSettings:
 
 @dataclass(frozen=True)
 class AppSettings:
+    storage: StorageSettings
     sessions: SessionSettings
     workdirs: WorkDirSettings
     agent: AgentSettings
@@ -39,6 +51,7 @@ def load_settings(path: Path) -> AppSettings:
     raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     base_dir = config_path.parent
 
+    storage = raw.get("storage", {})
     sessions = raw.get("sessions", {})
     workdirs = raw.get("workdirs", {})
     agent = raw.get("agent", {})
@@ -59,6 +72,15 @@ def load_settings(path: Path) -> AppSettings:
     )
 
     return AppSettings(
+        storage=StorageSettings(
+            account_url=str(storage.get("account_url", "")).strip(),
+            request_container=str(storage.get("request_container", "requests")),
+            response_container=str(storage.get("response_container", "responses")),
+            dead_letter_container=str(storage.get("dead_letter_container", "dead-letter")),
+            request_prefix=str(storage.get("request_prefix", "")),
+            poll_interval_seconds=float(storage.get("poll_interval_seconds", 5)),
+            max_requests_per_poll=int(storage.get("max_requests_per_poll", 10)),
+        ),
         sessions=SessionSettings(
             state_dir=state_dir,
             ttl_seconds=int(sessions.get("ttl_seconds", 86400)),

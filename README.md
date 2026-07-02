@@ -33,6 +33,22 @@ python -m copilot_box service prompt `
 
 返回 JSON 中的 `sessionId` 可用于后续 `--session-mode continue --session-id <id>`；不传 session id 时，`auto` 会继续同一 work dir 最近活跃的 session。
 
+## 处理 Azure Blob Storage request
+
+`service once` 会扫描 `storage.request_container`，领取一个或多个 request blob，调用 agent，并把状态和最终结果写入 `storage.response_container`：
+
+```powershell
+.\.venv\Scripts\python.exe -m copilot_box service once `
+  --config .\config\copilot-box.example.toml
+```
+
+Windows Service 主循环使用：
+
+```powershell
+.\.venv\Scripts\python.exe -m copilot_box service run `
+  --config .\config\copilot-box.example.toml
+```
+
 ## Windows Service 脚本
 
 当前推荐使用 [WinSW](https://github.com/winsw/winsw) 包装 CLI 进程：
