@@ -1,6 +1,6 @@
 # copilot-box
 
-`copilot-box` 是一个面向 Windows Service 部署的 Python CLI/backend。Backend worker 通过 GitHub Copilot SDK 在配置白名单中的 work dir 里运行 agent session；Android 客户端通过 Azure Web App 上的 FastAPI broker 建立 WebSocket，实时查看 Markdown response stream，并以聊天界面继续或新建 session。
+`copilot-box` 是一个面向 Windows Service 部署的 Python CLI/backend。Backend worker 通过 GitHub Copilot SDK 在配置白名单中的 work dir 里运行 agent session；Android 客户端通过 Azure Web App 上的 FastAPI broker 建立 WebSocket，实时查看 Markdown response stream，并以聊天界面继续或新建 session。正式部署认证使用 Entra ID/MSAL；shared token 仅用于本地开发。
 
 设计文档见 [`docs\design.md`](docs\design.md)。
 

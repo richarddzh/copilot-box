@@ -52,7 +52,7 @@ Android Client
 2. Broker 使用 Azure Web App 承载 FastAPI。
 3. Backend worker 主动向 broker 建立 outbound WebSocket，适合 Windows 服务器在 NAT/防火墙后运行。
 4. Android 默认只连接 broker，不保存任何云资源密钥。
-5. Broker 首版支持 shared token 认证；生产可扩展到 Entra ID / MSAL。
+5. Broker 本地开发支持 shared token；正式部署使用 Entra ID/MSAL，Android 发送 user delegated bearer token，worker 使用 managed identity 或 service principal 获取 broker API token。
 6. 每个消息都有 `messageId` 和 `requestId`，便于幂等、日志关联和客户端重试。
 7. Android client 必须呈现为聊天界面：用户消息显示在右侧/本端气泡，agent 消息显示在左侧/远端气泡，并在收到流式 delta 时原地追加内容。
 8. 每个 backend worker 首版只允许一个活跃 session/request；新的 request 在已有 request 运行时会被 broker 或 worker 拒绝为 `worker_busy`。
@@ -117,10 +117,16 @@ Android 连接：
 wss://<broker-app>.azurewebsites.net/ws/client
 ```
 
-首版认证：
+本地开发认证：
 
 ```text
 X-Copilot-Box-Token: <shared-token>
+```
+
+正式部署认证：
+
+```text
+Authorization: Bearer <MSAL access token for broker API>
 ```
 
 连接成功后，client 先发送 `client.hello`：
@@ -183,10 +189,16 @@ Backend worker 连接：
 wss://<broker-app>.azurewebsites.net/ws/worker
 ```
 
-首版认证：
+本地开发认证：
 
 ```text
 X-Copilot-Box-Worker-Token: <worker-token>
+```
+
+正式部署认证：
+
+```text
+Authorization: Bearer <managed identity or service principal token for broker API>
 ```
 
 连接成功后，worker 发送 `worker.hello`：

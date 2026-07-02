@@ -10,7 +10,12 @@ from typing import Any
 class BrokerClientSettings:
     url: str = ""
     worker_id: str = ""
+    auth_mode: str = "shared_secret"
     worker_token: str = ""
+    entra_tenant_id: str = ""
+    entra_client_id: str = ""
+    entra_client_secret: str = ""
+    entra_scope: str = ""
     display_name: str = ""
     reconnect_seconds: float = 5
     heartbeat_seconds: float = 30
@@ -84,7 +89,12 @@ def load_settings(path: Path) -> AppSettings:
         broker=BrokerClientSettings(
             url=str(broker.get("url", "")).strip(),
             worker_id=str(broker.get("worker_id", "")).strip(),
+            auth_mode=str(broker.get("auth_mode", "shared_secret")).strip().lower(),
             worker_token=str(broker.get("worker_token", "")).strip(),
+            entra_tenant_id=str(broker.get("entra_tenant_id", "")).strip(),
+            entra_client_id=str(broker.get("entra_client_id", "")).strip(),
+            entra_client_secret=str(broker.get("entra_client_secret", "")).strip(),
+            entra_scope=str(broker.get("entra_scope", "")).strip(),
             display_name=str(broker.get("display_name", "")).strip(),
             reconnect_seconds=float(broker.get("reconnect_seconds", 5)),
             heartbeat_seconds=float(broker.get("heartbeat_seconds", 30)),

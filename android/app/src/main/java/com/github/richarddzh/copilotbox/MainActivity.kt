@@ -25,6 +25,7 @@ class MainActivity : Activity(), BrokerClient.Listener {
 
     private lateinit var brokerUrl: EditText
     private lateinit var brokerToken: EditText
+    private lateinit var authModeSpinner: Spinner
     private lateinit var workerSpinner: Spinner
     private lateinit var workDirSpinner: Spinner
     private lateinit var sessionActionSpinner: Spinner
@@ -39,6 +40,7 @@ class MainActivity : Activity(), BrokerClient.Listener {
     private lateinit var scrollView: ScrollView
 
     private var brokerClient: BrokerClient? = null
+    private var msalTokenProvider: MsalTokenProvider? = null
     private var workers: List<BrokerWorker> = emptyList()
     private var activeSessions: List<ActiveSession> = emptyList()
     private var selectedWorkerId: String? = null
@@ -80,10 +82,18 @@ class MainActivity : Activity(), BrokerClient.Listener {
         )
         brokerToken = input(
             "Client token",
-            "shared secret token",
+            "shared secret token; ignored when using Entra ID/MSAL",
             preferences.getString("brokerToken", "").orEmpty(),
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD,
         )
+        authModeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                listOf("Shared token (local/dev)", "Entra ID / MSAL"),
+            )
+            setSelection(preferences.getInt("authMode", 0))
+        }
         workerSpinner = Spinner(this)
         workDirSpinner = Spinner(this)
         activeSessionSpinner = Spinner(this)
@@ -116,6 +126,7 @@ class MainActivity : Activity(), BrokerClient.Listener {
 
         container.addView(title("Connection"))
         addField(container, "Broker WebSocket URL", brokerUrl)
+        addSpinner(container, "Auth mode", authModeSpinner)
         addField(container, "Client token", brokerToken)
         container.addView(connectButton)
         container.addView(configStatus)
@@ -194,9 +205,48 @@ class MainActivity : Activity(), BrokerClient.Listener {
         persistConnectionInputs()
         configStatus.text = "Connecting..."
         brokerClient?.close()
+        if (authModeSpinner.selectedItemPosition == 1) {
+            connectWithMsal()
+            return
+        }
+        connectBrokerWithCredential(
+            authMode = BrokerClient.AuthMode.SHARED_SECRET,
+            credential = brokerToken.text.toString(),
+        )
+    }
+
+    private fun connectWithMsal() {
+        val provider = msalTokenProvider ?: MsalTokenProvider(
+            activity = this,
+            scopes = getString(R.string.msal_broker_scopes)
+                .split(" ")
+                .filter { it.isNotBlank() }
+                .toTypedArray(),
+        ).also { msalTokenProvider = it }
+        configStatus.text = "Signing in with Entra ID..."
+        provider.acquireToken(
+            onSuccess = { token ->
+                mainHandler.post {
+                    connectBrokerWithCredential(
+                        authMode = BrokerClient.AuthMode.ENTRA_ID,
+                        credential = token,
+                    )
+                }
+            },
+            onError = { message ->
+                mainHandler.post { configStatus.text = "MSAL failed: $message" }
+            },
+        )
+    }
+
+    private fun connectBrokerWithCredential(
+        authMode: BrokerClient.AuthMode,
+        credential: String,
+    ) {
         brokerClient = BrokerClient(
             brokerUrl = brokerUrl.text.toString(),
-            token = brokerToken.text.toString(),
+            authMode = authMode,
+            credential = credential,
             listener = this,
         ).also { it.connect() }
     }
@@ -483,6 +533,7 @@ class MainActivity : Activity(), BrokerClient.Listener {
         preferences.edit()
             .putString("brokerUrl", brokerUrl.text.toString())
             .putString("brokerToken", brokerToken.text.toString())
+            .putInt("authMode", authModeSpinner.selectedItemPosition)
             .apply()
     }
 

@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-Android 客户端通过 broker WebSocket 与 backend worker 通信。UI 分为连接配置页和聊天页：用户先在连接配置页填写 broker URL/token，再从 worker 上报的 work dir 白名单中选择运行位置，并选择“继续现有 session”或“在该 work dir 新建 session”；也可以从 broker 返回的 active running session 列表中直接加入正在运行的 session。进入聊天页后只显示聊天内容、状态和输入框。
+Android 客户端通过 broker WebSocket 与 backend worker 通信。正式部署使用 Entra ID/MSAL 登录并向 broker 发送 bearer token；本地开发仍可选择 shared token。UI 分为连接配置页和聊天页：用户先在连接配置页填写 broker URL 并选择 auth mode，再从 worker 上报的 work dir 白名单中选择运行位置，并选择“继续现有 session”或“在该 work dir 新建 session”；也可以从 broker 返回的 active running session 列表中直接加入正在运行的 session。进入聊天页后只显示聊天内容、状态和输入框。
 
 Agent 输出以流式 `agent.delta` 实时追加到 assistant 气泡中，并按 Markdown 渲染；`agent.final` 到达后用完整 Markdown 内容校正气泡。如果 final 返回 `reportPath`，客户端会通过 broker 请求 backend report workspace 中的文件并显示。
 
@@ -46,7 +46,10 @@ android\app\build\outputs\apk\debug\app-debug.apk
 | 字段 | 示例 | 说明 |
 | --- | --- | --- |
 | Broker WebSocket URL | `wss://<app-name>.azurewebsites.net/ws/client` | broker client endpoint |
-| Client token | `<client-token>` | broker client shared token |
+| Auth mode | `Entra ID / MSAL` | 正式部署使用 MSAL；本地调试可选 shared token |
+| Client token | `<client-token>` | 仅 shared token 模式使用 |
+
+使用 Entra ID/MSAL 前，需要把 `android\app\src\main\res\raw\auth_config_single_account.json` 中的 `client_id`、`tenant_id`、`redirect_uri` 替换为 Android app registration 的值，并把 `android\app\src\main\res\values\strings.xml` 中的 `msal_broker_scopes` 替换为 broker API scope，例如 `api://<broker-api-app-id>/CopilotBox.Access`。
 
 点击 **Connect** 后，broker 会返回已连接 worker 以及每个 worker 的 `allowedWorkDirs`。客户端从下拉框选择：
 

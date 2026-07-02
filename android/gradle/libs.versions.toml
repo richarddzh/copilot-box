@@ -3,10 +3,12 @@ agp = "8.7.3"
 kotlin = "2.0.21"
 okhttp = "4.12.0"
 markwon = "4.6.2"
+msal = "8.3.3"
 
 [libraries]
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 markwon = { module = "io.noties.markwon:core", version.ref = "markwon" }
+msal = { module = "com.microsoft.identity.client:msal", version.ref = "msal" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

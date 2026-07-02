@@ -52,18 +52,32 @@ Client token: <client-token>
 
 ## 3. Azure Web App 部署
 
+正式部署建议使用 Entra ID/MSAL。Shared secret 只保留给本地开发或临时调试。
+
 Web App app settings：
 
 | Setting | 示例 |
 | --- | --- |
-| `COPILOT_BOX_BROKER_AUTH_MODE` | `shared_secret` |
-| `COPILOT_BOX_CLIENT_SHARED_TOKEN` | Android client token |
-| `COPILOT_BOX_WORKER_SHARED_TOKEN` | backend worker token |
+| `COPILOT_BOX_BROKER_AUTH_MODE` | `entra_id` |
+| `COPILOT_BOX_ENTRA_TENANT_ID` | Entra tenant id |
+| `COPILOT_BOX_ENTRA_AUDIENCE` | broker API app id 或 app ID URI，例如 `api://<broker-api-app-id>` |
+| `COPILOT_BOX_ENTRA_ALLOWED_CLIENT_APP_IDS` | Android public client app id，逗号分隔 |
+| `COPILOT_BOX_ENTRA_ALLOWED_WORKER_APP_IDS` | worker managed identity 或 service principal app id，逗号分隔 |
+| `COPILOT_BOX_ENTRA_REQUIRED_CLIENT_SCOPE` | 可选，例如 `CopilotBox.Access` |
+| `COPILOT_BOX_ENTRA_REQUIRED_WORKER_ROLE` | 可选，例如 `CopilotBox.Worker` |
 
 Startup command：
 
 ```bash
 bash startup.sh
+```
+
+本地开发仍可使用 shared secret：
+
+```powershell
+$env:COPILOT_BOX_BROKER_AUTH_MODE = "shared_secret"
+$env:COPILOT_BOX_CLIENT_SHARED_TOKEN = "<client-token>"
+$env:COPILOT_BOX_WORKER_SHARED_TOKEN = "<worker-token>"
 ```
 
 ## 4. GitHub Actions 部署

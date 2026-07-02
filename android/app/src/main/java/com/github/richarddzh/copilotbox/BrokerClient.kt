@@ -11,12 +11,18 @@ import java.util.concurrent.TimeUnit
 
 class BrokerClient(
     private val brokerUrl: String,
-    private val token: String,
+    private val authMode: AuthMode,
+    private val credential: String,
     private val listener: Listener,
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build(),
 ) {
+    enum class AuthMode {
+        SHARED_SECRET,
+        ENTRA_ID,
+    }
+
     interface Listener {
         fun onConnected(workers: List<BrokerWorker>, activeSessions: List<ActiveSession>)
         fun onSessionSnapshot(requestId: String, snapshot: SessionSnapshot)
@@ -33,7 +39,12 @@ class BrokerClient(
     fun connect() {
         val request = Request.Builder()
             .url(normalizeWebSocketUrl(brokerUrl))
-            .header("X-Copilot-Box-Token", token)
+            .apply {
+                when (authMode) {
+                    AuthMode.SHARED_SECRET -> header("X-Copilot-Box-Token", credential)
+                    AuthMode.ENTRA_ID -> header("Authorization", "Bearer $credential")
+                }
+            }
             .build()
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {

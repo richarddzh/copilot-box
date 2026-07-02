@@ -1,10 +1,18 @@
 [broker]
 url = "wss://<broker-app>.azurewebsites.net/ws/worker"
 worker_id = "worker-home-pc"
+auth_mode = "shared_secret" # local/dev: shared_secret; production: entra_id
 worker_token = "<worker-shared-token>"
 display_name = "Home PC"
 reconnect_seconds = 5
 heartbeat_seconds = 30
+
+# Entra ID production auth. If entra_client_secret is empty, the worker uses
+# DefaultAzureCredential, including managed identity on Azure hosts.
+entra_tenant_id = "<tenant-id>"
+entra_client_id = "" # optional managed identity or service principal client id
+entra_client_secret = ""
+entra_scope = "api://<broker-api-app-id>/.default"
 
 [sessions]
 state_dir = "C:\\ProgramData\\copilot-box\\state"

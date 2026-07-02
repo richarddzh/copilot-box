@@ -31,4 +31,5 @@ kotlin {
 dependencies {
     implementation(libs.okhttp)
     implementation(libs.markwon)
+    implementation(libs.msal)
 }

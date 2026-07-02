@@ -9,6 +9,7 @@ from typing import Any
 from anyio import BrokenResourceError, ClosedResourceError
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 
+from copilot_box_broker.auth import authenticate_websocket
 from copilot_box_broker.config import BrokerSettings
 
 PROTOCOL_VERSION = "2026-07-02"
@@ -105,7 +106,7 @@ def create_app(settings: BrokerSettings | None = None) -> FastAPI:
 
     @app.websocket("/ws/worker")
     async def worker_ws(websocket: WebSocket) -> None:
-        if websocket.headers.get("x-copilot-box-worker-token") != resolved_settings.worker_token:
+        if authenticate_websocket(websocket.headers, resolved_settings, "worker") is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         await websocket.accept()
@@ -144,7 +145,7 @@ def create_app(settings: BrokerSettings | None = None) -> FastAPI:
 
     @app.websocket("/ws/client")
     async def client_ws(websocket: WebSocket) -> None:
-        if websocket.headers.get("x-copilot-box-token") != resolved_settings.client_token:
+        if authenticate_websocket(websocket.headers, resolved_settings, "client") is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
         await websocket.accept()

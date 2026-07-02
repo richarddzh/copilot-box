@@ -33,7 +33,7 @@ python -m venv .venv
 
 ## 3. 运行 broker 与 backend worker
 
-启动 broker：
+本地开发可以使用 shared token 启动 broker：
 
 ```powershell
 $env:COPILOT_BOX_CLIENT_SHARED_TOKEN = "<client-token>"
@@ -50,6 +50,7 @@ $env:COPILOT_BOX_WORKER_SHARED_TOKEN = "<worker-token>"
 [broker]
 url = "ws://127.0.0.1:8000/ws/worker"
 worker_id = "worker-home-pc"
+auth_mode = "shared_secret"
 worker_token = "<worker-token>"
 
 [workdirs]
@@ -62,6 +63,29 @@ allowed = ["Q:\\gitroot\\copilot-box"]
 .\.venv\Scripts\python.exe -m copilot_box service run `
   --config .\config\copilot-box.example.toml
 ```
+
+正式部署使用 Entra ID。Broker Web App 设置：
+
+```powershell
+$env:COPILOT_BOX_BROKER_AUTH_MODE = "entra_id"
+$env:COPILOT_BOX_ENTRA_TENANT_ID = "<tenant-id>"
+$env:COPILOT_BOX_ENTRA_AUDIENCE = "api://<broker-api-app-id>"
+$env:COPILOT_BOX_ENTRA_ALLOWED_CLIENT_APP_IDS = "<android-client-app-id>"
+$env:COPILOT_BOX_ENTRA_ALLOWED_WORKER_APP_IDS = "<worker-managed-identity-or-sp-app-id>"
+```
+
+Worker 配置：
+
+```toml
+[broker]
+auth_mode = "entra_id"
+entra_tenant_id = "<tenant-id>"
+entra_client_id = "" # managed identity client id；系统分配 identity 可留空
+entra_client_secret = "" # service principal secret；managed identity 留空
+entra_scope = "api://<broker-api-app-id>/.default"
+```
+
+Android 正式部署选择 **Entra ID / MSAL**，使用 `auth_config_single_account.json` 中配置的 Android public client app registration 登录，并把 access token 作为 `Authorization: Bearer <token>` 连接 broker。
 
 ## 4. Session 行为
 

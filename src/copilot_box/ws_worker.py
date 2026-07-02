@@ -22,8 +22,10 @@ async def run_worker(*, settings: AppSettings, max_requests: int | None = None) 
         raise ValueError("broker.url is required for service run")
     if not settings.broker.worker_id:
         raise ValueError("broker.worker_id is required for service run")
-    if not settings.broker.worker_token:
+    if settings.broker.auth_mode == "shared_secret" and not settings.broker.worker_token:
         raise ValueError("broker.worker_token is required for service run")
+    if settings.broker.auth_mode == "entra_id" and not settings.broker.entra_scope:
+        raise ValueError("broker.entra_scope is required for Entra ID broker auth")
 
     processed = 0
     while max_requests is None or processed < max_requests:
@@ -104,7 +106,7 @@ async def _serve_connection(
 
 
 def _connect(settings: AppSettings):
-    headers = {"X-Copilot-Box-Worker-Token": settings.broker.worker_token}
+    headers = _auth_headers(settings)
     kwargs: dict[str, Any] = {
         "ping_interval": settings.broker.heartbeat_seconds,
     }
@@ -115,6 +117,34 @@ def _connect(settings: AppSettings):
     )
     kwargs[header_argument] = headers
     return websockets.connect(settings.broker.url, **kwargs)
+
+
+def _auth_headers(settings: AppSettings) -> dict[str, str]:
+    if settings.broker.auth_mode == "shared_secret":
+        return {"X-Copilot-Box-Worker-Token": settings.broker.worker_token}
+    if settings.broker.auth_mode == "entra_id":
+        return {"Authorization": f"Bearer {_entra_access_token(settings)}"}
+    raise ValueError(f"unsupported broker auth mode: {settings.broker.auth_mode}")
+
+
+def _entra_access_token(settings: AppSettings) -> str:
+    from azure.identity import ClientSecretCredential, DefaultAzureCredential
+
+    if settings.broker.entra_client_id and settings.broker.entra_client_secret:
+        if not settings.broker.entra_tenant_id:
+            raise ValueError("broker.entra_tenant_id is required for client secret auth")
+        credential = ClientSecretCredential(
+            tenant_id=settings.broker.entra_tenant_id,
+            client_id=settings.broker.entra_client_id,
+            client_secret=settings.broker.entra_client_secret,
+        )
+    else:
+        managed_identity_client_id = settings.broker.entra_client_id or None
+        credential = DefaultAzureCredential(managed_identity_client_id=managed_identity_client_id)
+    try:
+        return credential.get_token(settings.broker.entra_scope).token
+    finally:
+        credential.close()
 
 
 async def _handle_request(

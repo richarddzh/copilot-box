@@ -1,0 +1,16 @@
+{
+  "client_id": "00000000-0000-0000-0000-000000000000",
+  "authorization_user_agent": "WEBVIEW",
+  "redirect_uri": "msauth://com.github.richarddzh.copilotbox/replace-with-signature-hash",
+  "broker_redirect_uri_registered": false,
+  "account_mode": "SINGLE",
+  "authorities": [
+    {
+      "type": "AAD",
+      "audience": {
+        "type": "AzureADMyOrg",
+        "tenant_id": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  ]
+}
