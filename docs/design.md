@@ -2,94 +2,86 @@
 
 ## 1. 背景与目标
 
-Copilot Box 是一个部署在 Windows 服务器上的命令行应用。它会被包装成 Windows Service 长期运行，为远程客户端提供 GitHub Copilot agent 能力。客户端不直接连接服务进程，而是通过 Azure Storage Account 的 Blob Container 投递请求、扫描结果，从而实现弱连接、可重试、易审计的远程 agent 工作流。
+Copilot Box 是一个部署在 Windows 服务器上的命令行应用。它会被包装成 Windows Service 长期运行，并通过 GitHub Copilot SDK 提供 agent 能力。Android 客户端不直接连接 Windows Service，而是连接一个部署在 Azure Web App 上的 FastAPI broker。Broker 负责认证、连接管理、路由和审计，并通过 WebSocket 在 Android 客户端和后端 worker 之间转发 JSON 消息。
 
 核心目标：
 
-1. 提供 `copilot-box` CLI，既能本地调试，也能作为服务主进程运行。
-2. 支持通过脚本安装、卸载 Windows Service。
-3. 使用 GitHub Copilot SDK 提供 agent/session 能力。
-4. 通过 Blob Storage 的 list/lease/read/write 协议接收请求并返回输出。
-5. 让 request 中的 work dir 决定 agent 的上下文，使用户可以远程在不同服务器目录中开展工作。
-6. 支持复杂 HTML/Markdown 报告输出到一个独立 GitHub repo，并由 GitHub Actions 部署到启用认证的 Azure Static Web Apps。
+1. 提供 `copilot-box` CLI，既能本地调试，也能作为 Windows Service 主进程运行。
+2. 使用 GitHub Copilot SDK 提供 agent/session 能力。
+3. Android、broker、Windows backend worker 之间使用 WebSocket 通信。
+4. Broker 运行在 Azure Web App，作为公网入口和消息路由层。
+5. Work dir 决定 agent 的执行上下文，使用户可以远程在不同服务器目录中利用 Copilot 开展工作。
+6. 支持 session 创建、继续、实时 token/delta 流式输出、最终结果和错误事件。
+7. 支持复杂 HTML/Markdown 报告输出到 backend 本地 report workspace，并允许 Android 通过 broker WebSocket 读取。
 
 非目标：
 
-1. 不把 Blob Storage 当作强实时消息队列；首版接受秒级轮询延迟。
-2. 不让客户端直接访问 Windows Service。
-3. 不在首版实现多租户隔离沙箱；首版通过 allowlist、身份认证、审计和并发控制降低风险。
+1. 不引入额外云存储作为 Android 与 backend 之间的通信通道。
+2. 不让 Android 直接连接 Windows Service。
+3. 首版不实现完整多租户沙箱；通过 allowlist、认证、审计和 backend 全局单活跃 session 降低风险。
 
 ## 2. 总体架构
 
 ```text
 Android Client
     |
-    | write request blob / list response blobs
+    | WebSocket: /ws/client
     v
-Azure Storage Account
-    | containers:
-    | - requests
-    | - responses
-    | - dead-letter
-    | - optional session-state backups
-    v
-Copilot Box Windows Service
+Broker Service
+Azure Web App + FastAPI
     |
-    | normalize work dir, acquire blob lease, route session
+    | WebSocket route by workerId/workDir/sessionId
+    v
+Copilot Box Backend Worker
+Windows Service / CLI
+    |
+    | GitHub Copilot SDK session in selected work dir
     v
 GitHub Copilot SDK Agent
-    |
-    | read/write files, run tools in work dir, stream events
-    v
-Response Blobs
 
-Agent Report Workspace GitHub Repo
+Backend Report Workspace Folder
+    ^
+    | report.read / report.content through broker WebSocket
     |
-    | push markdown/html report
-    v
-GitHub Actions
-    |
-    | deploy
-    v
-Azure Static Web Apps with authentication required
+Android Client
 ```
 
 ## 2.1 已确认设计决策
 
-1. Storage 后端使用 Azure Storage Account。
-2. Request、response、dead-letter 均基于 Azure Blob Storage container 实现。
-3. 服务通过 Blob list + lease 的方式发现并领取 request，客户端通过扫描 response blob 获取结果。
-4. 服务端访问 Azure Storage Account 首选 Managed Identity；如果不在 Azure VM/Arc/托管环境中运行，则使用服务专用 Entra 应用身份。
-5. Android 客户端不得内置 Storage Account key。首版推荐由受信任 broker 签发短期、最小权限 SAS，让客户端只拥有写 request、读 response 的能力。
+1. Android 与 backend 的实时通信使用 broker WebSocket。
+2. Broker 使用 Azure Web App 承载 FastAPI。
+3. Backend worker 主动向 broker 建立 outbound WebSocket，适合 Windows 服务器在 NAT/防火墙后运行。
+4. Android 默认只连接 broker，不保存任何云资源密钥。
+5. Broker 首版支持 shared token 认证；生产可扩展到 Entra ID / MSAL。
+6. 每个消息都有 `messageId` 和 `requestId`，便于幂等、日志关联和客户端重试。
+7. Android client 必须呈现为聊天界面：用户消息显示在右侧/本端气泡，agent 消息显示在左侧/远端气泡，并在收到流式 delta 时原地追加内容。
+8. 每个 backend worker 首版只允许一个活跃 session/request；新的 request 在已有 request 运行时会被 broker 或 worker 拒绝为 `worker_busy`。
+9. Client 对 agent 响应按 Markdown 渲染；流式过程中持续追加并刷新 Markdown，`agent.final` 到达后用完整 Markdown 内容覆盖校正。
 
 ## 3. 运行形态
 
-### 3.1 CLI
+### 3.1 Backend CLI
 
-CLI 是唯一的进程入口，建议命令结构如下：
+CLI 是 backend worker 的唯一进程入口：
 
 ```powershell
 copilot-box version
+copilot-box service prompt --config C:\copilot-box\config.toml --work-dir Q:\repo --prompt "..."
 copilot-box service run --config C:\copilot-box\config.toml
-copilot-box service once --config C:\copilot-box\config.toml
-copilot-box request validate .\sample-request.json
 ```
 
 其中：
 
-1. `service run`：长期轮询 Blob，适合 Windows Service。
-2. `service once`：处理一轮或一个 request，适合本地调试、CI 和排障。
-3. `request validate`：校验 request blob 的 JSON schema。
+1. `service prompt`：本地直接调用 GitHub Copilot SDK，适合调试。
+2. `service run`：作为长期运行 worker，连接 broker 并处理 WebSocket request。
 
 ### 3.2 Windows Service
 
-推荐首版使用 WinSW 包装 CLI，而不是一开始直接写 pywin32 ServiceFramework。
+推荐首版继续使用 WinSW 包装 CLI。服务主体命令：
 
-原因：
-
-1. WinSW 可以把普通 CLI 稳定包装成 Windows Service，降低首版复杂度。
-2. stdout/stderr、工作目录、环境变量、自动重启策略都可以通过 XML 配置。
-3. 后续如果需要更深的 SCM 控制，再引入 pywin32 原生 service。
+```powershell
+python -m copilot_box service run --config C:\ProgramData\copilot-box\config.toml
+```
 
 安装脚本职责：
 
@@ -97,267 +89,439 @@ copilot-box request validate .\sample-request.json
 2. 生成服务 XML，设置 `PYTHONPATH`、工作目录、日志目录和服务参数。
 3. 调用 `winsw.exe install` 与 `winsw.exe start`。
 
-卸载脚本职责：
+### 3.3 Broker Service
 
-1. 调用 `winsw.exe stop`。
-2. 调用 `winsw.exe uninstall`。
-3. 保留日志和配置，避免误删排障信息。
+Broker 是一个 FastAPI app，部署到 Azure Web App。入口：
 
-## 4. Blob 协议设计
+```bash
+python -m uvicorn copilot_box_broker.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
 
-### 4.1 Container 划分
+核心 endpoint：
 
-建议使用以下 container：
-
-| Container | 用途 |
+| Endpoint | 用途 |
 | --- | --- |
-| `requests` | 客户端投递 request blob |
-| `responses` | 服务写入 agent 输出、状态、最终结果 |
-| `dead-letter` | 解析失败、权限失败、执行失败且不可重试的请求 |
-| `session-state` | 可选，用于备份 session 元数据，不作为首版强依赖 |
+| `GET /healthz` | 健康检查 |
+| `WS /ws/client` | Android 客户端连接 |
+| `WS /ws/worker` | Windows backend worker 连接 |
 
-### 4.2 Request 命名
+## 4. WebSocket 连接模型
 
-用户要求 blob 以 `work-dir-name + timestamp` 命名。建议规范化为：
+### 4.1 Client 连接
 
-```text
-requests/{workDirSafe}/{yyyyMMddTHHmmssfffZ}-{requestId}.json
-```
-
-示例：
+Android 连接：
 
 ```text
-requests/q-gitroot-copilot-box/20260702T060110226Z-01J2REQ9J8Y4.json
+wss://<broker-app>.azurewebsites.net/ws/client
 ```
 
-设计理由：
+首版认证：
 
-1. `workDirSafe` 便于按目录 prefix 扫描和分区。
-2. timestamp 保持人类可读与时间排序。
-3. requestId 保证同一毫秒内不冲突，并支持幂等。
-4. 原始 work dir 不直接放入 blob name，避免泄露完整路径和引入非法字符。
+```text
+X-Copilot-Box-Token: <shared-token>
+```
 
-### 4.3 Request JSON Schema 首版草案
+连接成功后，client 先发送 `client.hello`：
 
 ```json
 {
+  "type": "client.hello",
   "protocolVersion": "2026-07-02",
-  "requestId": "01J2REQ9J8Y4",
-  "createdAt": "2026-07-02T06:01:10.226Z",
-  "client": {
-    "type": "android",
-    "userId": "user-or-device-id"
-  },
-  "workDir": "Q:\\gitroot\\copilot-box",
-  "session": {
-    "mode": "auto",
-    "sessionId": null
-  },
-  "agent": {
-    "model": null,
-    "prompt": "请分析当前项目并生成报告",
-    "attachments": []
-  },
-  "response": {
-    "container": "responses",
-    "prefix": "q-gitroot-copilot-box/20260702T060110226Z-01J2REQ9J8Y4"
+  "messageId": "msg-001",
+  "clientId": "android-device-1",
+  "capabilities": {
+  "streaming": true,
+  "chatUi": true,
+  "markdown": true
   }
 }
 ```
 
-`session.mode` 建议支持：
-
-| Mode | 行为 |
-| --- | --- |
-| `new` | 强制创建新 session |
-| `continue` | 必须继续指定 `sessionId`，不存在则失败 |
-| `auto` | 优先继续指定 session；未指定时按 work dir 找最近活跃 session；找不到则新建 |
-
-### 4.4 Response 命名
-
-为了支持客户端扫描和近实时显示，建议每个 request 使用独立 response prefix：
-
-```text
-responses/{workDirSafe}/{timestamp}-{requestId}/000001.status.json
-responses/{workDirSafe}/{timestamp}-{requestId}/000002.agent.delta.json
-responses/{workDirSafe}/{timestamp}-{requestId}/000003.tool.call.json
-responses/{workDirSafe}/{timestamp}-{requestId}/999999.final.json
-```
-
-事件格式示例：
+Broker 返回：
 
 ```json
 {
+  "type": "broker.hello",
   "protocolVersion": "2026-07-02",
-  "requestId": "01J2REQ9J8Y4",
-  "sessionId": "sess_abc",
-  "sequence": 2,
-  "type": "agent.delta",
-  "createdAt": "2026-07-02T06:01:12.000Z",
+  "messageId": "msg-002",
   "payload": {
-    "text": "正在读取项目结构..."
+    "connectionId": "client-conn-abc",
+    "availableWorkers": [
+      {
+        "workerId": "worker-home-pc",
+        "displayName": "Home PC",
+        "allowedWorkDirs": ["Q:\\gitroot\\copilot-box"],
+        "reportWorkspace": {
+          "enabled": true,
+          "root": "Q:\\copilot-box-reports"
+        },
+        "busy": false
+      }
+    ]
   }
 }
 ```
 
-最终结果：
+### 4.2 Worker 连接
+
+Backend worker 连接：
+
+```text
+wss://<broker-app>.azurewebsites.net/ws/worker
+```
+
+首版认证：
+
+```text
+X-Copilot-Box-Worker-Token: <worker-token>
+```
+
+连接成功后，worker 发送 `worker.hello`：
 
 ```json
 {
+  "type": "worker.hello",
   "protocolVersion": "2026-07-02",
-  "requestId": "01J2REQ9J8Y4",
-  "sessionId": "sess_abc",
-  "type": "final",
-  "status": "succeeded",
-  "summary": "已完成分析",
-  "reportUrl": "https://example.azurestaticapps.net/reports/01J2REQ9J8Y4/",
-  "completedAt": "2026-07-02T06:05:00.000Z"
+  "messageId": "msg-101",
+  "workerId": "worker-home-pc",
+  "displayName": "Home PC",
+  "allowedWorkDirs": ["Q:\\gitroot\\copilot-box"],
+  "reportWorkspace": {
+    "enabled": true,
+    "root": "Q:\\copilot-box-reports"
+  },
+  "capabilities": {
+    "models": [],
+    "streaming": true,
+    "maxConcurrentRequests": 1,
+    "singleActiveSession": true,
+    "markdown": true,
+    "reportRead": true
+  }
 }
 ```
 
-### 4.5 Request 领取与幂等
+Broker 返回：
 
-服务扫描 `requests` 后不能直接执行，必须先尝试获取 blob lease：
-
-1. `list_blobs` 找到候选 request。
-2. 对 request blob acquire lease。
-3. 成功拿到 lease 的 worker 才能处理。
-4. 写入 `responses/.../000001.status.json` 表示 accepted。
-5. 执行期间周期性 renew lease。
-6. 成功后写 final response，并标记本地 request 状态为 completed。
-7. 失败且可重试时释放 lease；不可重试时复制 request 到 `dead-letter` 并写 final failed。
-
-幂等策略：
-
-1. requestId 是全局幂等键。
-2. 本地 SQLite 记录 requestId、blob etag、lease 状态、处理结果。
-3. 如果重复扫描到已完成 request，直接忽略或补写 final response。
-
-### 4.6 Azure Storage 认证与授权
-
-服务端推荐使用 Azure Identity 默认凭据链，并在生产环境绑定 Managed Identity。该身份只需要以下最小权限：
-
-| Scope | Role |
-| --- | --- |
-| `requests` container | `Storage Blob Data Reader` 与 lease 所需写权限；实际可用 `Storage Blob Data Contributor` |
-| `responses` container | `Storage Blob Data Contributor` |
-| `dead-letter` container | `Storage Blob Data Contributor` |
-| `session-state` container | `Storage Blob Data Contributor`，如果启用该 container |
-
-Android 客户端推荐通过一个极小的认证 broker 获取短期 SAS：
-
-1. 客户端先用用户身份登录 broker。
-2. broker 根据用户、设备、work dir allowlist 和 request scope 签发短期 SAS。
-3. request SAS 只允许 `create/write` 到指定 prefix。
-4. response SAS 只允许 `read/list` 指定 response prefix。
-5. SAS TTL 建议 5 到 30 分钟，并且所有 request 都带 `requestId` 方便吊销和审计。
-
-如果不希望引入 broker，可以评估 Android 直接使用 Microsoft Entra ID 访问 Blob，但需要处理移动端 token、RBAC 粒度和 work dir 级授权映射。禁止把 Storage Account key 或长期 SAS 固化在 Android app 中。
-
-## 5. Session 设计
-
-### 5.1 Session 归属
-
-session 的上下文由 work dir 决定，但 sessionId 仍然是显式对象。建议 session key：
-
-```text
-{workDirCanonicalHash}:{sessionId}
+```json
+{
+  "type": "broker.worker.accepted",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-102",
+  "payload": {
+    "workerId": "worker-home-pc"
+  }
+}
 ```
 
-本地 session 元数据保存在 SQLite：
+## 5. JSON Payload 设计
+
+### 5.1 通用 envelope
+
+所有 WebSocket JSON 消息都使用统一 envelope：
+
+```json
+{
+  "type": "agent.request",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-123",
+  "requestId": "req-456",
+  "timestamp": "2026-07-02T12:00:00Z",
+  "payload": {}
+}
+```
+
+字段：
 
 | 字段 | 说明 |
 | --- | --- |
-| `session_id` | Copilot Box 侧 session id |
+| `type` | 消息类型 |
+| `protocolVersion` | 协议版本 |
+| `messageId` | 单条消息幂等 id |
+| `requestId` | 一次 agent request 的关联 id |
+| `timestamp` | UTC 时间 |
+| `payload` | 类型相关内容 |
+
+### 5.2 Client 发起 agent request
+
+Client -> Broker -> Worker：
+
+```json
+{
+  "type": "agent.request",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-201",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:00Z",
+  "payload": {
+    "workerId": "worker-home-pc",
+    "workDir": "Q:\\gitroot\\copilot-box",
+    "session": {
+      "mode": "auto",
+      "sessionId": null
+    },
+    "agent": {
+      "prompt": "请总结当前项目",
+      "model": null,
+      "timeoutSeconds": 120
+    }
+  }
+}
+```
+
+### 5.3 Broker ack
+
+Broker -> Client：
+
+```json
+{
+  "type": "broker.accepted",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-202",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:01Z",
+  "payload": {
+    "workerId": "worker-home-pc"
+  }
+}
+```
+
+### 5.4 Worker progress
+
+Worker -> Broker -> Client：
+
+```json
+{
+  "type": "agent.progress",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-301",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:02Z",
+  "payload": {
+    "stage": "running",
+    "text": "正在分析项目结构..."
+  }
+}
+```
+
+### 5.5 Worker delta
+
+Worker -> Broker -> Client：
+
+```json
+{
+  "type": "agent.delta",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-302",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:03Z",
+  "payload": {
+    "role": "assistant",
+    "sequence": 1,
+    "text": "项目"
+  }
+}
+```
+
+`agent.delta` 是聊天界面实时显示的核心事件。Android 对同一 `requestId` 的 assistant 气泡执行 append，而不是每次新增一条消息。`sequence` 从 1 递增，client 可用它忽略重复 delta。
+
+### 5.6 Worker final
+
+Worker -> Broker -> Client：
+
+```json
+{
+  "type": "agent.final",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-401",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:30Z",
+  "payload": {
+    "status": "succeeded",
+    "sessionId": "sess_abc",
+    "createdSession": true,
+    "workDir": "Q:\\gitroot\\copilot-box",
+    "output": "项目总结...",
+    "reportPath": null
+  }
+}
+```
+
+`agent.final.payload.output` 必须包含完整 assistant 文本，便于 client 在丢失某些 delta 时用 final 内容校正聊天气泡。
+
+如果 agent 生成了大型报告，`agent.final` 可以同时返回 `reportPath`：
+
+```json
+{
+  "type": "agent.final",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-402",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:30Z",
+  "payload": {
+    "status": "succeeded",
+    "sessionId": "sess_abc",
+    "output": "报告已生成：reports/req-001/index.md",
+    "reportPath": "reports/req-001/index.md",
+    "contentType": "text/markdown"
+  }
+}
+```
+
+### 5.7 Error
+
+任意方向：
+
+```json
+{
+  "type": "error",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-500",
+  "requestId": "req-001",
+  "timestamp": "2026-07-02T12:00:31Z",
+  "payload": {
+    "code": "worker_not_available",
+    "message": "Requested worker is not connected.",
+    "retryable": true
+  }
+}
+```
+
+### 5.8 Report read
+
+Client -> Broker -> Worker：
+
+```json
+{
+  "type": "report.read",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-601",
+  "requestId": "report-001",
+  "timestamp": "2026-07-02T12:01:00Z",
+  "payload": {
+    "workerId": "worker-home-pc",
+    "path": "reports/req-001/index.md"
+  }
+}
+```
+
+Worker -> Broker -> Client：
+
+```json
+{
+  "type": "report.content",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-602",
+  "requestId": "report-001",
+  "timestamp": "2026-07-02T12:01:01Z",
+  "payload": {
+    "path": "reports/req-001/index.md",
+    "contentType": "text/markdown",
+    "content": "# 报告\n\n..."
+  }
+}
+```
+
+Report path 必须是 report workspace root 下的相对路径；禁止绝对路径和 `..` 越界。
+
+## 6. Broker 路由与状态
+
+Broker 维护内存连接表：
+
+| 表 | Key | Value |
+| --- | --- | --- |
+| clients | `clientConnectionId` | client WebSocket |
+| workers | `workerId` | worker WebSocket + metadata |
+| requests | `requestId` | clientConnectionId + workerId + status |
+
+首版不持久化消息。断线后的行为：
+
+1. Client 断开：broker 继续等待 worker final，但无法投递时丢弃并记录日志。
+2. Worker 断开：broker 对该 worker 的 in-flight request 返回 `error(worker_disconnected)`。
+3. Broker 重启：所有 WebSocket 连接重建，client 需要重新发送 request。
+4. Worker 已有活跃 request：broker 直接返回 `error(worker_busy)`，client 在聊天界面显示为失败的 assistant 气泡。
+
+后续如果需要强可靠投递，可以再引入 durable queue；首版优先实时性和简单性。
+
+## 7. Session 设计
+
+Session 的上下文由 work dir 决定，但 sessionId 仍然是显式对象。每个 backend worker 首版只允许一个活跃 session/request，原因是 Copilot agent 会访问真实 work dir、可能执行工具操作，并且 Windows Service 进程需要避免多个远程 prompt 同时修改同一台机器上的文件。Backend worker 的可选 work dir 来自配置白名单，并在 `worker.hello` 中上报给 broker；Android 不需要手动输入任意路径，只从 broker 下发的白名单中选择。Backend worker 本地 SQLite 记录：
+
+| 字段 | 说明 |
+| --- | --- |
+| `session_id` | Copilot Box session id |
 | `work_dir` | canonical absolute path |
-| `work_dir_hash` | 用于 blob prefix 和索引 |
-| `copilot_session_ref` | Copilot SDK session 引用 |
 | `created_at` | 创建时间 |
 | `last_active_at` | 最近活跃时间 |
 | `status` | active, idle, closed, failed |
 
-### 5.2 新建或继续 Session 的决策
-
-建议决策顺序：
+决策顺序：
 
 1. `session.mode == new`：总是创建新 session。
-2. `session.mode == continue`：必须存在 `session.sessionId`，且 work dir 匹配，否则失败。
+2. `session.mode == continue`：必须存在 `session.sessionId`，且 work dir 匹配。
 3. `session.mode == auto` 且提供 sessionId：尝试继续该 session。
 4. `session.mode == auto` 且未提供 sessionId：查找同 work dir 最近活跃且未过期 session。
 5. 找不到可用 session：创建新 session。
 
-建议默认 session TTL 为 24 小时，可配置。
+Android 端简化为两个动作：
 
-### 5.3 并发控制
+| 动作 | 协议映射 | 说明 |
+| --- | --- | --- |
+| 继续现有 session | `session.mode = "auto"` | 对选中 work dir 继续最近活跃 session；如果没有则创建 |
+| 在该 work dir 新建 session | `session.mode = "new"` | 强制创建新 session |
 
-首版建议同一个 work dir 同时只允许一个 agent request 执行：
+默认 session TTL 为 24 小时。
 
-1. 避免同一目录的文件修改互相覆盖。
-2. 简化 session 状态一致性。
-3. 后续可以按 session 或 task 类型放宽。
+并发规则：
 
-实现方式：
+1. Worker 进程内使用单个全局 async lock 包住一次完整 agent request。
+2. Lock 被占用时，worker 不启动第二个 Copilot SDK session，直接返回 `error(worker_busy)`。
+3. Broker 也维护 worker busy 状态，尽量在转发前拒绝新 request。
+4. `service prompt` 本地调试命令仍然直接执行，但它和 Windows Service 不应同时针对同一 state dir 运行。
 
-1. 本地 SQLite 加 work dir 锁。
-2. 或使用一个 `responses/{workDirSafe}/.lock` blob lease 做跨进程锁。
-3. 单机首版优先 SQLite；多实例部署时改为 blob lease。
+## 8. Work Dir 安全模型
 
-## 6. Work Dir 安全模型
+Backend worker 不能信任 client 传入的 work dir。必须：
 
-request 中的 work dir 不能直接信任。服务必须：
-
-1. 将路径 canonicalize，解析符号链接和 `..`。
+1. canonicalize 路径，解析 `..`。
 2. 要求路径位于配置的 allowlist root 中。
-3. 拒绝 UNC 路径、系统目录、用户 profile 敏感目录，除非显式允许。
-4. 限制 agent tool 权限，例如是否允许执行 shell、是否允许网络访问、是否允许 git push。
-5. 记录每个 request 的 userId、workDir、sessionId 和关键 tool 操作。
+3. 拒绝系统目录和敏感目录，除非显式允许。
+4. 同一 backend worker 首版只允许一个 agent request 并发执行。
+5. 记录 requestId、clientId、workerId、workDir、sessionId 和关键 tool 操作。
 
 示例配置：
 
 ```toml
 [workdirs]
-allowed_roots = [
-  "Q:\\gitroot",
-  "D:\\workspaces"
-]
-default_root = "Q:\\gitroot"
+allowed = ["Q:\\gitroot\\copilot-box"]
 ```
 
-## 7. GitHub Copilot SDK 集成
+## 9. GitHub Copilot SDK 集成
 
-建议在代码中引入一个适配层，而不是让业务逻辑直接依赖 SDK：
+Backend worker 通过适配层调用 GitHub Copilot SDK：
 
 ```text
-BlobRequestProcessor
+WebSocketWorker
+    -> AgentService
     -> SessionManager
     -> CopilotAgentAdapter
         -> GitHub Copilot SDK
 ```
 
-`CopilotAgentAdapter` 需要提供：
+适配层提供：
 
 1. `create_session(work_dir, options) -> session`
 2. `resume_session(session_ref) -> session`
-3. `send_message(session, prompt, attachments) -> event stream`
+3. `send_message(session, prompt, attachments, on_delta) -> event stream`
 4. `cancel(session, request_id)`
 5. `close(session)`
 
-这样做的原因：
+## 10. Report Workspace
 
-1. GitHub Copilot SDK 的语言、包名和 API 可能变化。
-2. 适配层便于单元测试 request/session/blob 协议。
-3. 未来可以切换为 CLI bridge、Node sidecar 或 Python SDK。
-
-待确认点：当前项目是 Python，但 GitHub Copilot SDK 的正式可用形态需要确认。如果 SDK 首发是 Node/TypeScript，建议 Python service 通过本地 sidecar 进程或 gRPC/stdio bridge 调用。
-
-## 8. Agent Report Workspace
-
-### 8.1 目标
-
-复杂报告不建议全部塞进 response blob。Agent 可以把 Markdown/HTML 报告写入一个独立 GitHub repo：
+复杂报告写入 backend 本地目录：
 
 ```text
-copilot-box-reports/
+Q:\copilot-box-reports\
   reports/
     {requestId}/
       index.md
@@ -365,156 +529,113 @@ copilot-box-reports/
       assets/
 ```
 
-写入后 push 到默认分支或专用分支，触发 GitHub Actions 部署到 Azure Static Web Apps。
+Backend worker 只允许通过配置的 `reports.root_dir` 读取报告文件。Broker 不直接访问文件系统，只负责把 `report.read` 转发到对应 worker，并把 `report.content` 转发回 client。Android 根据 `contentType` 渲染内容：
 
-### 8.2 写入策略
+1. `text/markdown`：用聊天界面的 Markdown renderer 展示。
+2. `text/html`：首版按文本显示；后续如引入 WebView，必须禁用任意脚本或只允许受信任报告。
+3. 其他类型：以纯文本显示，具体后续扩展。
 
-首版建议：
+## 11. 配置设计
 
-1. 服务拥有一个专门的 GitHub token 或 GitHub App installation token。
-2. 每个 request 写入 `reports/{requestId}`。
-3. 小报告直接 commit 到 main。
-4. 大报告或需要审核的报告走 PR。
-5. final response 中返回 `reportUrl` 和 Git commit SHA。
-
-### 8.3 Static Web Apps 认证
-
-Static Web Apps 必须禁止匿名访问。建议配置 `staticwebapp.config.json`：
-
-```json
-{
-  "routes": [
-    {
-      "route": "/reports/*",
-      "allowedRoles": ["authenticated"]
-    },
-    {
-      "route": "/*",
-      "allowedRoles": ["authenticated"]
-    }
-  ],
-  "responseOverrides": {
-    "401": {
-      "redirect": "/.auth/login/github",
-      "statusCode": 302
-    }
-  }
-}
-```
-
-如果 Android 客户端需要内嵌 WebView 展示报告，需要提前确认认证方式：
-
-1. GitHub 登录。
-2. Microsoft Entra ID 登录。
-3. Static Web Apps custom auth。
-4. 由后端签发短期访问链接，但这会改变“禁止匿名访问”的语义。
-
-## 9. 配置设计
-
-建议使用 TOML 配置文件：
+Backend worker：
 
 ```toml
-[storage]
-account_url = "https://<account>.blob.core.windows.net"
-request_container = "requests"
-response_container = "responses"
-dead_letter_container = "dead-letter"
-poll_interval_seconds = 5
-
-[identity]
-mode = "managed_identity"
+[broker]
+url = "wss://<broker-app>.azurewebsites.net/ws/worker"
+worker_id = "worker-home-pc"
+worker_token = "<secret>"
+display_name = "Home PC"
+heartbeat_seconds = 30
 
 [sessions]
 state_dir = "C:\\ProgramData\\copilot-box\\state"
 ttl_seconds = 86400
 max_concurrent_requests = 1
+single_active_session = true
 
 [workdirs]
-allowed_roots = ["Q:\\gitroot"]
+allowed = ["Q:\\gitroot\\copilot-box"]
 
 [agent]
 adapter = "github_copilot_sdk"
-model = "" # 空字符串表示使用 Copilot 账号/运行时默认模型
+model = ""
+timeout_seconds = 120
+approve_all_tool_requests = true
+base_directory = "C:\\ProgramData\\copilot-box\\copilot-home"
 
 [reports]
 enabled = true
-repo = "owner/copilot-box-reports"
-branch = "main"
-base_path = "reports"
-static_web_app_base_url = "https://<app>.azurestaticapps.net"
+root_dir = "Q:\\copilot-box-reports"
+max_file_bytes = 1048576
 ```
 
-## 10. 错误处理与状态
+Broker Web App settings：
 
-每个 request 至少产生以下状态之一：
+| Setting | 示例 |
+| --- | --- |
+| `COPILOT_BOX_BROKER_AUTH_MODE` | `shared_secret` |
+| `COPILOT_BOX_CLIENT_SHARED_TOKEN` | Android shared token |
+| `COPILOT_BOX_WORKER_SHARED_TOKEN` | Worker shared token |
+
+Android app：
+
+| 字段 | 说明 |
+| --- | --- |
+| Broker WebSocket URL | `wss://<broker-app>.azurewebsites.net/ws/client` |
+| Client token | `COPILOT_BOX_CLIENT_SHARED_TOKEN` |
+| Worker ID | 要路由到的 backend worker |
+| Work dir | 从 worker 上报白名单中选择 |
+| Session action | 继续现有 session，或在选中 work dir 新建 session |
+| Prompt | 用户输入 |
+
+Android 聊天 UI：
+
+| 元素 | 说明 |
+| --- | --- |
+| 顶部设置区 | Broker URL、token、worker 下拉、work dir 下拉、session action |
+| 消息列表 | 纵向滚动的聊天气泡 |
+| 用户气泡 | 点击发送后立即追加，显示用户 prompt |
+| Agent 气泡 | 收到 `broker.accepted` 后创建占位，收到 `agent.delta` 时实时 append |
+| Markdown 渲染 | Agent 气泡按 Markdown 显示，支持标题、列表、代码块、链接等常见语法 |
+| 状态文本 | 显示 connected/running/failed/succeeded |
+| 输入框 | 多行 prompt，底部发送按钮 |
+
+## 12. 错误处理与状态
+
+状态：
 
 | 状态 | 含义 |
 | --- | --- |
-| `accepted` | 服务已领取 request |
-| `running` | agent 正在执行 |
+| `accepted` | broker 已接收并路由 request |
+| `running` | worker 正在执行 |
 | `succeeded` | 成功完成 |
-| `failed_retryable` | 可重试失败 |
-| `failed_terminal` | 不可重试失败 |
+| `failed` | 不可重试失败 |
 | `cancelled` | 被取消 |
 
-错误 response 必须包含：
+错误 payload 必须包含：
 
-1. 错误类型。
-2. 可给客户端展示的 message。
-3. 内部 correlationId。
-4. 是否可重试。
-5. 如果进入 dead-letter，提供 dead-letter blob name。
+1. `code`
+2. `message`
+3. `retryable`
+4. `requestId`
 
-## 11. 可观测性
+## 13. 可观测性
 
-首版建议：
+1. Broker 日志记录连接、认证失败、路由失败、request 完成。
+2. Backend worker 记录 requestId、sessionId、workDir、agent 错误。
+3. Android 以聊天气泡显示用户 prompt、agent delta、final 和 error。
+4. 所有日志使用 requestId 关联。
 
-1. Windows Event Log：记录服务启动、停止、致命错误。
-2. 文件日志：按天滚动，放在 `C:\ProgramData\copilot-box\logs`。
-3. Blob response events：给客户端展示 request 级进度。
-4. correlationId：贯穿 request blob、response blob、日志、report commit。
-5. 指标：poll latency、request duration、success/failure count、active sessions。
+## 14. 部署
 
-## 12. 部署与升级
+1. Broker：Azure Web App + GitHub Actions workflow 部署。
+2. Backend：Windows Service + WinSW。
+3. Android：GitHub Actions 构建 APK，并在 tag release 中发布安装包。
+4. Docs：Sphinx + GitHub Pages。
 
-建议目录：
+## 15. 后续待确认
 
-```text
-C:\Program Files\copilot-box\
-  app\
-  scripts\
-  service\
-C:\ProgramData\copilot-box\
-  config.toml
-  state\
-  logs\
-```
-
-升级策略：
-
-1. 停止服务。
-2. 备份 config/state。
-3. 安装新 wheel 或替换 venv。
-4. 执行配置迁移。
-5. 启动服务并写 health response。
-
-## 13. 首版里程碑
-
-1. 项目初始化：pyproject、CLI 入口、设计文档、服务脚本骨架。
-2. Blob request/response 协议：schema、轮询、lease、幂等记录。
-3. SessionManager：work dir 校验、session 创建/继续策略、本地 SQLite。
-4. CopilotAgentAdapter：接入 GitHub Copilot SDK 或 sidecar。
-5. Windows Service：WinSW 安装卸载、日志、自动重启。
-6. Report Workspace：生成报告、push repo、GitHub Actions、Static Web Apps auth。
-7. Android client 对接：request 投递、response 扫描、报告页打开。
-
-## 14. 需要进一步确认的问题
-
-1. GitHub Copilot SDK 的目标接入形态是什么：Python SDK、Node/TypeScript SDK，还是允许通过 Copilot CLI/sidecar 间接调用？
-2. Android 客户端是否接受“认证 broker 签发短期 SAS”的推荐方案？如果不接受，需要在 Entra ID 直连和其他授权方式之间选择。
-3. response 是否需要 token 级别流式输出，还是 request 完成后一次性写 final blob 即可？
-4. `auto` session 策略中，未指定 sessionId 时是否应该自动继续最近 session，还是为了安全总是新建？
-5. 同一 work dir 是否允许并发多个 request？首版建议不允许。
-6. Windows Service 包装方案是否接受 WinSW？如果必须纯 Python 原生服务，需要改为 pywin32。
-7. Report Workspace 是直接 push main，还是每次生成 PR 后由人工或 Action 合并？
-8. Static Web Apps 的认证提供方偏好是什么：GitHub、Microsoft Entra ID，还是自定义认证？
+1. Broker 生产认证是否切换到 Entra ID/MSAL。
+2. 是否需要 broker 持久化 in-flight request。
+3. 是否需要多 worker 自动选择，而不是 Android 指定 workerId。
+4. 是否需要多 worker 自动选择，而不是 Android 指定 workerId。

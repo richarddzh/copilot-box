@@ -1,18 +1,8 @@
 # copilot-box
 
-`copilot-box` 是一个面向 Windows Service 部署的 Python CLI 项目骨架。它的目标是从 Azure Blob Storage 拉取远程请求，调用 GitHub Copilot SDK 驱动 agent 在指定 work dir 中工作，并通过 Blob 与报告站点返回结果。
+`copilot-box` 是一个面向 Windows Service 部署的 Python CLI/backend。Backend worker 通过 GitHub Copilot SDK 在配置白名单中的 work dir 里运行 agent session；Android 客户端通过 Azure Web App 上的 FastAPI broker 建立 WebSocket，实时查看 Markdown response stream，并以聊天界面继续或新建 session。
 
 设计文档见 [`docs\design.md`](docs\design.md)。
-
-HTML 文档站点使用 Sphinx 构建，入口见 [`docs\index.md`](docs\index.md)。
-
-Android 客户端项目位于 [`android`](android)，使用文档见 [`docs\android.md`](docs\android.md)。
-
-本地无 Android Studio 的 CLI 构建入口：
-
-```powershell
-.\android\scripts\build-debug.ps1
-```
 
 ## 本地运行
 
@@ -21,52 +11,67 @@ python -m copilot_box --help
 python -m copilot_box version
 ```
 
-## 调用 Copilot SDK
-
-安装依赖后先下载 SDK runtime：
+下载 GitHub Copilot SDK runtime：
 
 ```powershell
 python -m copilot download-runtime
 ```
 
-发送一个 prompt，并让服务按 work dir 自动创建或继续 session：
+本地直接发送一个 prompt：
 
 ```powershell
 python -m copilot_box service prompt `
   --config .\config\copilot-box.example.toml `
   --work-dir Q:\gitroot\copilot-box `
-  --prompt "请总结当前目录" `
+  --prompt "请用 Markdown 总结当前项目" `
   --json
 ```
 
-返回 JSON 中的 `sessionId` 可用于后续 `--session-mode continue --session-id <id>`；不传 session id 时，`auto` 会继续同一 work dir 最近活跃的 session。
-
-## 处理 Azure Blob Storage request
-
-`service once` 会扫描 `storage.request_container`，领取一个或多个 request blob，调用 agent，并把状态和最终结果写入 `storage.response_container`：
+启动 backend worker，连接 broker：
 
 ```powershell
-.\.venv\Scripts\python.exe -m copilot_box service once `
-  --config .\config\copilot-box.example.toml
+python -m copilot_box service run --config .\config\copilot-box.example.toml
 ```
 
-Windows Service 主循环使用：
+## Broker
+
+Broker 是 FastAPI WebSocket 服务：
+
+| Endpoint | 用途 |
+| --- | --- |
+| `GET /healthz` | 健康检查 |
+| `WS /ws/client` | Android client 连接 |
+| `WS /ws/worker` | Windows backend worker 连接 |
+
+本地启动：
 
 ```powershell
-.\.venv\Scripts\python.exe -m copilot_box service run `
-  --config .\config\copilot-box.example.toml
+.\.venv\Scripts\python.exe -m uvicorn copilot_box_broker.main:app `
+  --app-dir .\broker `
+  --host 127.0.0.1 `
+  --port 8000
 ```
 
-## Windows Service 脚本
+## Android
 
-当前推荐使用 [WinSW](https://github.com/winsw/winsw) 包装 CLI 进程：
+Android 客户端项目位于 [`android`](android)，使用文档见 [`docs\android.md`](docs\android.md)。
+
+CLI 构建 debug APK：
+
+```powershell
+.\android\scripts\build-debug.ps1
+```
+
+## Windows Service
+
+推荐使用 [WinSW](https://github.com/winsw/winsw) 包装 CLI 进程：
 
 ```powershell
 .\scripts\install-service.ps1 -WinSWPath C:\tools\WinSW-x64.exe
 .\scripts\uninstall-service.ps1
 ```
 
-服务主体命令预留为：
+服务主体命令：
 
 ```powershell
 python -m copilot_box service run --config .\config\copilot-box.example.toml
@@ -78,7 +83,3 @@ python -m copilot_box service run --config .\config\copilot-box.example.toml
 .\.venv\Scripts\python.exe -m pip install -e .[docs]
 .\.venv\Scripts\sphinx-build.exe -b html .\docs .\docs\_build\html
 ```
-
-推送到 GitHub 默认分支后，`.github\workflows\docs.yml` 会构建并发布到 GitHub Pages。
-
-Android APK 由 `.github\workflows\android.yml` 构建；推送 `v*` 或 `android-v*` tag 时会创建 GitHub Release，并上传可安装的 debug APK。

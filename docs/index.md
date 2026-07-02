@@ -1,6 +1,6 @@
 # copilot-box 文档
 
-`copilot-box` 是一个可包装为 Windows Service 的命令行应用，用于通过 Azure Blob Storage 接收远程请求，并使用 GitHub Copilot SDK 在指定 work dir 中运行 agent session。
+`copilot-box` 是一个可包装为 Windows Service 的命令行 backend，通过 broker WebSocket 接收 Android 客户端请求，并使用 GitHub Copilot SDK 在配置白名单中的 work dir 里运行 agent session。
 
 ```{toctree}
 :maxdepth: 2
@@ -8,10 +8,11 @@
 
 usage
 android
+broker
 design
 ```
 
 ## 快速入口
 
-1. 先阅读 {doc}`usage`，了解如何安装依赖、下载 Copilot runtime、发送 prompt、创建或继续 session。
-2. 再阅读 {doc}`design`，了解 Blob 协议、Windows Service、session、report workspace 和 GitHub Pages/Static Web Apps 相关设计。
+1. 先阅读 {doc}`usage`，了解如何安装依赖、下载 Copilot runtime、运行 backend worker。
+2. 再阅读 {doc}`design`，了解 WebSocket 协议、单活跃 session、聊天式流式输出和 report workspace 设计。
