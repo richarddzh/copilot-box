@@ -28,8 +28,10 @@ class MainActivity : Activity(), BrokerClient.Listener {
     private lateinit var workerSpinner: Spinner
     private lateinit var workDirSpinner: Spinner
     private lateinit var sessionActionSpinner: Spinner
+    private lateinit var activeSessionSpinner: Spinner
     private lateinit var configStatus: TextView
     private lateinit var startChatButton: Button
+    private lateinit var joinSessionButton: Button
 
     private lateinit var prompt: EditText
     private lateinit var chatStatus: TextView
@@ -38,9 +40,11 @@ class MainActivity : Activity(), BrokerClient.Listener {
 
     private var brokerClient: BrokerClient? = null
     private var workers: List<BrokerWorker> = emptyList()
+    private var activeSessions: List<ActiveSession> = emptyList()
     private var selectedWorkerId: String? = null
     private var selectedWorkDir: String? = null
     private var selectedSessionMode: String = "auto"
+    private var selectedSessionId: String? = null
     private var lastRequestWorkerId: String? = null
     private var currentAssistantBubble: TextView? = null
     private val currentAssistantMarkdown = StringBuilder()
@@ -82,6 +86,7 @@ class MainActivity : Activity(), BrokerClient.Listener {
         )
         workerSpinner = Spinner(this)
         workDirSpinner = Spinner(this)
+        activeSessionSpinner = Spinner(this)
         sessionActionSpinner = Spinner(this).apply {
             adapter = ArrayAdapter(
                 this@MainActivity,
@@ -95,9 +100,14 @@ class MainActivity : Activity(), BrokerClient.Listener {
             setPadding(0, 16, 0, 16)
         }
         startChatButton = Button(this).apply {
-            text = "Start chat"
+            text = "Start new chat"
             isEnabled = false
             setOnClickListener { startChat() }
+        }
+        joinSessionButton = Button(this).apply {
+            text = "Join active session"
+            isEnabled = false
+            setOnClickListener { joinActiveSession() }
         }
         val connectButton = Button(this).apply {
             text = "Connect"
@@ -114,6 +124,9 @@ class MainActivity : Activity(), BrokerClient.Listener {
         addSpinner(container, "Work dir", workDirSpinner)
         addSpinner(container, "Session", sessionActionSpinner)
         container.addView(startChatButton)
+        container.addView(title("Active running sessions"))
+        addSpinner(container, "Active session", activeSessionSpinner)
+        container.addView(joinSessionButton)
         return ScrollView(this).apply { addView(container) }
     }
 
@@ -166,9 +179,11 @@ class MainActivity : Activity(), BrokerClient.Listener {
         brokerClient?.close()
         brokerClient = null
         workers = emptyList()
+        activeSessions = emptyList()
         selectedWorkerId = null
         selectedWorkDir = null
         selectedSessionMode = "auto"
+        selectedSessionId = null
         lastRequestWorkerId = null
         currentAssistantBubble = null
         currentAssistantMarkdown.clear()
@@ -199,9 +214,27 @@ class MainActivity : Activity(), BrokerClient.Listener {
         selectedWorkerId = worker.workerId
         selectedWorkDir = workDir
         selectedSessionMode = if (sessionActionSpinner.selectedItemPosition == 1) "new" else "auto"
+        selectedSessionId = null
         currentAssistantBubble = null
         currentAssistantMarkdown.clear()
         showChatView()
+    }
+
+    private fun joinActiveSession() {
+        val activeSession = activeSessionSpinner.selectedItem as? ActiveSession ?: run {
+            configStatus.text = "No active session selected"
+            return
+        }
+        selectedWorkerId = activeSession.workerId
+        selectedWorkDir = activeSession.workDir
+        selectedSessionMode = if (activeSession.sessionId.isNullOrBlank()) "auto" else "continue"
+        selectedSessionId = activeSession.sessionId
+        lastRequestWorkerId = activeSession.workerId
+        currentAssistantBubble = null
+        currentAssistantMarkdown.clear()
+        showChatView()
+        chatStatus.text = "Joining active session..."
+        brokerClient?.joinSession(activeSession.workerId, activeSession.requestId)
     }
 
     private fun sendPrompt() {
@@ -223,7 +256,13 @@ class MainActivity : Activity(), BrokerClient.Listener {
         currentAssistantBubble = addAssistantBubble("...")
         try {
             lastRequestWorkerId = workerId
-            brokerClient?.sendPrompt(workerId, workDir, selectedSessionMode, selectedPrompt)
+            brokerClient?.sendPrompt(
+                workerId,
+                workDir,
+                selectedSessionMode,
+                selectedSessionId,
+                selectedPrompt,
+            )
             chatStatus.text = "Running..."
             prompt.setText("")
         } catch (exc: Exception) {
@@ -231,22 +270,45 @@ class MainActivity : Activity(), BrokerClient.Listener {
         }
     }
 
-    override fun onConnected(workers: List<BrokerWorker>) {
+    override fun onConnected(workers: List<BrokerWorker>, activeSessions: List<ActiveSession>) {
         mainHandler.post {
             this.workers = workers
+            this.activeSessions = activeSessions
             if (::configStatus.isInitialized) {
                 configStatus.text = if (workers.isEmpty()) "Connected: no workers" else "Connected"
                 startChatButton.isEnabled = workers.isNotEmpty()
+                joinSessionButton.isEnabled = activeSessions.isNotEmpty()
                 workerSpinner.adapter = ArrayAdapter(
                     this,
                     android.R.layout.simple_spinner_dropdown_item,
                     workers,
+                )
+                activeSessionSpinner.adapter = ArrayAdapter(
+                    this,
+                    android.R.layout.simple_spinner_dropdown_item,
+                    activeSessions,
                 )
                 updateWorkDirs()
                 workerSpinner.setOnItemSelectedListener(
                     SimpleItemSelectedListener { updateWorkDirs() },
                 )
             }
+        }
+    }
+
+    override fun onSessionSnapshot(requestId: String, snapshot: SessionSnapshot) {
+        mainHandler.post {
+            selectedWorkerId = snapshot.activeSession.workerId
+            selectedWorkDir = snapshot.activeSession.workDir
+            selectedSessionId = snapshot.activeSession.sessionId
+            selectedSessionMode = if (selectedSessionId.isNullOrBlank()) "auto" else "continue"
+            lastRequestWorkerId = snapshot.activeSession.workerId
+            messages.removeAllViews()
+            addUserBubble(snapshot.activeSession.prompt)
+            currentAssistantMarkdown.clear()
+            currentAssistantMarkdown.append(snapshot.outputSoFar)
+            currentAssistantBubble = addAssistantBubble(snapshot.outputSoFar.ifBlank { "..." })
+            chatStatus.text = "Watching: ${snapshot.activeSession.sessionId ?: requestId}"
         }
     }
 
@@ -270,6 +332,8 @@ class MainActivity : Activity(), BrokerClient.Listener {
             currentAssistantMarkdown.clear()
             currentAssistantMarkdown.append(final.output)
             renderAssistantMarkdown(final.output)
+            selectedSessionId = final.sessionId
+            selectedSessionMode = if (final.sessionId.isNullOrBlank()) "auto" else "continue"
             chatStatus.text = "${final.status}: ${final.sessionId.orEmpty()}"
             val reportPath = final.reportPath
             val workerId = lastRequestWorkerId
@@ -316,6 +380,7 @@ class MainActivity : Activity(), BrokerClient.Listener {
             if (::configStatus.isInitialized) {
                 configStatus.text = text
                 startChatButton.isEnabled = false
+                joinSessionButton.isEnabled = false
             }
         }
     }

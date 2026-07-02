@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-Android 客户端通过 broker WebSocket 与 backend worker 通信。UI 分为连接配置页和聊天页：用户先在连接配置页填写 broker URL/token，再从 worker 上报的 work dir 白名单中选择运行位置，并选择“继续现有 session”或“在该 work dir 新建 session”；进入聊天页后只显示聊天内容、状态和输入框。
+Android 客户端通过 broker WebSocket 与 backend worker 通信。UI 分为连接配置页和聊天页：用户先在连接配置页填写 broker URL/token，再从 worker 上报的 work dir 白名单中选择运行位置，并选择“继续现有 session”或“在该 work dir 新建 session”；也可以从 broker 返回的 active running session 列表中直接加入正在运行的 session。进入聊天页后只显示聊天内容、状态和输入框。
 
 Agent 输出以流式 `agent.delta` 实时追加到 assistant 气泡中，并按 Markdown 渲染；`agent.final` 到达后用完整 Markdown 内容校正气泡。如果 final 返回 `reportPath`，客户端会通过 broker 请求 backend report workspace 中的文件并显示。
 
@@ -57,7 +57,9 @@ android\app\build\outputs\apk\debug\app-debug.apk
 | Session | 继续现有 session，或在该 work dir 新建 session |
 | Message | 用户 prompt |
 
-点击 **Send** 后：
+如果 broker 返回 `activeSessions`，连接页会显示 **Active running sessions** 下拉框。点击 **Join active session** 后，客户端发送 `session.join`，收到 `session.snapshot` 后进入聊天页，显示原始 prompt 与 `outputSoFar`，并继续接收同一 request 的后续 `agent.delta` / `agent.final`。`agent.final` 返回 `sessionId` 后，之后在该聊天页发送的新 prompt 会以 `session.mode = "continue"` 和该 `sessionId` 继续同一个 Copilot session。
+
+进入聊天页并点击 **Send** 后：
 
 1. 客户端立即添加用户聊天气泡。
 2. Broker accepted 后创建 assistant 气泡。

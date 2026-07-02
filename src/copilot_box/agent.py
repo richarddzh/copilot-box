@@ -155,12 +155,15 @@ class AgentService:
         request: PromptRequest,
         *,
         on_delta: Callable[[str], None] | None = None,
+        on_started: Callable[[SessionRecord, bool], None] | None = None,
     ) -> PromptResult:
         session, created = self._session_store.select_session(
             mode=request.session_mode,
             work_dir=request.work_dir,
             requested_session_id=request.session_id,
         )
+        if on_started is not None:
+            on_started(session, created)
         output = await self._adapter.send_prompt(
             session=session,
             prompt=request.prompt,

@@ -84,6 +84,103 @@ def test_websocket_routes_streaming_agent_messages() -> None:
             assert app_client.receive_json()["payload"]["sessionId"] == "sess_1"
 
 
+def test_websocket_discovers_and_joins_active_session() -> None:
+    client = make_client()
+
+    with client.websocket_connect(
+        "/ws/worker",
+        headers={"X-Copilot-Box-Worker-Token": "worker-token"},
+    ) as worker:
+        worker.send_json(
+            {
+                "type": "worker.hello",
+                "workerId": "worker-1",
+                "displayName": "Worker 1",
+                "allowedWorkDirs": ["Q:\\gitroot\\copilot-box"],
+            }
+        )
+        worker.receive_json()
+
+        with client.websocket_connect(
+            "/ws/client",
+            headers={"X-Copilot-Box-Token": "client-token"},
+        ) as owner:
+            owner.send_json({"type": "client.hello", "clientId": "owner"})
+            owner.receive_json()
+            owner.send_json(
+                {
+                    "type": "agent.request",
+                    "requestId": "req-active",
+                    "payload": {
+                        "workerId": "worker-1",
+                        "workDir": "Q:\\gitroot\\copilot-box",
+                        "session": {"mode": "auto", "sessionId": None},
+                        "agent": {"prompt": "long task"},
+                    },
+                }
+            )
+            assert owner.receive_json()["type"] == "broker.accepted"
+            worker.receive_json()
+            worker.send_json(
+                {
+                    "type": "session.started",
+                    "requestId": "req-active",
+                    "payload": {
+                        "sessionId": "sess_active",
+                        "createdSession": True,
+                        "workDir": "Q:\\gitroot\\copilot-box",
+                        "status": "running",
+                    },
+                }
+            )
+            assert owner.receive_json()["type"] == "session.started"
+            worker.send_json(
+                {
+                    "type": "agent.delta",
+                    "requestId": "req-active",
+                    "payload": {"sequence": 1, "text": "hello ", "contentType": "text/markdown"},
+                }
+            )
+            owner.receive_json()
+
+            with client.websocket_connect(
+                "/ws/client",
+                headers={"X-Copilot-Box-Token": "client-token"},
+            ) as watcher:
+                watcher.send_json({"type": "client.hello", "clientId": "watcher"})
+                hello = watcher.receive_json()
+                active = hello["payload"]["activeSessions"][0]
+                assert active["requestId"] == "req-active"
+                assert active["sessionId"] == "sess_active"
+                assert active["outputPreview"] == "hello "
+
+                watcher.send_json(
+                    {
+                        "type": "session.join",
+                        "requestId": "join-1",
+                        "payload": {"workerId": "worker-1", "requestId": "req-active"},
+                    }
+                )
+                snapshot = watcher.receive_json()
+                assert snapshot["type"] == "session.snapshot"
+                assert snapshot["payload"]["activeSession"]["prompt"] == "long task"
+                assert snapshot["payload"]["outputSoFar"] == "hello "
+
+                worker.send_json(
+                    {
+                        "type": "agent.delta",
+                        "requestId": "req-active",
+                        "payload": {
+                            "sequence": 2,
+                            "text": "world",
+                            "contentType": "text/markdown",
+                        },
+                    }
+                )
+                assert owner.receive_json()["payload"]["text"] == "world"
+                assert watcher.receive_json()["payload"]["text"] == "world"
+
+
 def test_websocket_routes_report_read() -> None:
     client = make_client()
 

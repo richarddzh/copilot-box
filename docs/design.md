@@ -58,6 +58,7 @@ Android Client
 8. 每个 backend worker 首版只允许一个活跃 session/request；新的 request 在已有 request 运行时会被 broker 或 worker 拒绝为 `worker_busy`。
 9. Client 对 agent 响应按 Markdown 渲染；流式过程中持续追加并刷新 Markdown，`agent.final` 到达后用完整 Markdown 内容覆盖校正。
 10. Android UI 分为连接配置页和聊天页；聊天页不显示连接配置，并提供退出回连接配置页以重新开始。
+11. Broker 在 `broker.hello` 中返回当前 running active session；Android 可加入该 session，先显示 `session.snapshot` 中的最新输出，再继续接收后续 streaming。
 
 ## 3. 运行形态
 
@@ -131,9 +132,9 @@ X-Copilot-Box-Token: <shared-token>
   "messageId": "msg-001",
   "clientId": "android-device-1",
   "capabilities": {
-  "streaming": true,
-  "chatUi": true,
-  "markdown": true
+    "streaming": true,
+    "chatUi": true,
+    "markdown": true
   }
 }
 ```
@@ -157,6 +158,17 @@ Broker 返回：
           "root": "Q:\\copilot-box-reports"
         },
         "busy": false
+      }
+    ],
+    "activeSessions": [
+      {
+        "requestId": "req-active",
+        "workerId": "worker-home-pc",
+        "workDir": "Q:\\gitroot\\copilot-box",
+        "sessionId": "sess_abc",
+        "status": "running",
+        "prompt": "请生成项目报告",
+        "outputPreview": "正在分析..."
       }
     ]
   }
@@ -287,20 +299,22 @@ Broker -> Client：
 }
 ```
 
-### 5.4 Worker progress
+### 5.4 Worker session started
 
-Worker -> Broker -> Client：
+Worker 在选定或创建 Copilot SDK session 后先发送 `session.started`。Broker 用它更新 active session 的 `sessionId`，加入该 running session 的 client 之后会用这个 `sessionId` 继续工作。
 
 ```json
 {
-  "type": "agent.progress",
+  "type": "session.started",
   "protocolVersion": "2026-07-02",
-  "messageId": "msg-301",
+  "messageId": "msg-300",
   "requestId": "req-001",
   "timestamp": "2026-07-02T12:00:02Z",
   "payload": {
-    "stage": "running",
-    "text": "正在分析项目结构..."
+    "sessionId": "sess_abc",
+    "createdSession": true,
+    "workDir": "Q:\\gitroot\\copilot-box",
+    "status": "running"
   }
 }
 ```
@@ -369,7 +383,49 @@ Worker -> Broker -> Client：
 }
 ```
 
-### 5.7 Error
+### 5.7 Active session join
+
+Client 可加入 `broker.hello.payload.activeSessions` 中的 running session：
+
+```json
+{
+  "type": "session.join",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-450",
+  "requestId": "join-001",
+  "timestamp": "2026-07-02T12:00:10Z",
+  "payload": {
+    "workerId": "worker-home-pc",
+    "requestId": "req-active"
+  }
+}
+```
+
+Broker 返回当前快照并把 client 加入该 request 的订阅者集合。后续 `agent.delta`、`agent.final` 或错误会广播给原始 client 和所有 joined clients。
+
+```json
+{
+  "type": "session.snapshot",
+  "protocolVersion": "2026-07-02",
+  "messageId": "msg-451",
+  "requestId": "req-active",
+  "timestamp": "2026-07-02T12:00:10Z",
+  "payload": {
+    "activeSession": {
+      "requestId": "req-active",
+      "workerId": "worker-home-pc",
+      "workDir": "Q:\\gitroot\\copilot-box",
+      "sessionId": "sess_abc",
+      "status": "running",
+      "prompt": "请生成项目报告",
+      "outputPreview": "正在分析..."
+    },
+    "outputSoFar": "正在分析..."
+  }
+}
+```
+
+### 5.8 Error
 
 任意方向：
 
@@ -388,7 +444,7 @@ Worker -> Broker -> Client：
 }
 ```
 
-### 5.8 Report read
+### 5.9 Report read
 
 Client -> Broker -> Worker：
 

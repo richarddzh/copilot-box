@@ -18,7 +18,8 @@ class BrokerClient(
         .build(),
 ) {
     interface Listener {
-        fun onConnected(workers: List<BrokerWorker>)
+        fun onConnected(workers: List<BrokerWorker>, activeSessions: List<ActiveSession>)
+        fun onSessionSnapshot(requestId: String, snapshot: SessionSnapshot)
         fun onAccepted(requestId: String)
         fun onDelta(requestId: String, sequence: Int, text: String)
         fun onFinal(requestId: String, final: AgentFinal)
@@ -53,10 +54,23 @@ class BrokerClient(
         })
     }
 
-    fun sendPrompt(workerId: String, workDir: String, sessionMode: String, prompt: String): String {
+    fun sendPrompt(
+        workerId: String,
+        workDir: String,
+        sessionMode: String,
+        sessionId: String?,
+        prompt: String,
+    ): String {
         val requestId = "android-${UUID.randomUUID()}"
         val socket = webSocket ?: throw IllegalStateException("Not connected to broker")
-        socket.send(agentRequestJson(requestId, workerId, workDir, sessionMode, prompt))
+        socket.send(agentRequestJson(requestId, workerId, workDir, sessionMode, sessionId, prompt))
+        return requestId
+    }
+
+    fun joinSession(workerId: String, activeRequestId: String): String {
+        val requestId = "join-${UUID.randomUUID()}"
+        val socket = webSocket ?: throw IllegalStateException("Not connected to broker")
+        socket.send(sessionJoinJson(requestId, workerId, activeRequestId))
         return requestId
     }
 
@@ -77,7 +91,14 @@ class BrokerClient(
         val requestId = message.optString("requestId").ifBlank { null }
         val payload = message.optJSONObject("payload") ?: JSONObject()
         when (message.optString("type")) {
-            "broker.hello" -> listener.onConnected(parseWorkers(payload))
+            "broker.hello" -> listener.onConnected(
+                parseWorkers(payload),
+                parseActiveSessions(payload),
+            )
+            "session.snapshot" -> listener.onSessionSnapshot(
+                requestId.orEmpty(),
+                parseSessionSnapshot(payload),
+            )
             "broker.accepted" -> listener.onAccepted(requestId.orEmpty())
             "agent.delta" -> listener.onDelta(
                 requestId.orEmpty(),

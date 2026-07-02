@@ -124,8 +124,8 @@ async def _handle_request(
     message: dict[str, Any],
 ) -> None:
     request_id = str(message.get("requestId") or "")
-    delta_queue: asyncio.Queue[str | None] = asyncio.Queue()
-    sender_task = asyncio.create_task(_send_deltas(websocket, request_id, delta_queue))
+    event_queue: asyncio.Queue[tuple[str, Any] | None] = asyncio.Queue()
+    sender_task = asyncio.create_task(_send_stream_events(websocket, request_id, event_queue))
     try:
         payload = message.get("payload") or {}
         session = payload.get("session") or {}
@@ -139,9 +139,20 @@ async def _handle_request(
                 timeout_seconds=agent.get("timeoutSeconds"),
                 model=agent.get("model"),
             ),
-            on_delta=lambda text: delta_queue.put_nowait(text),
+            on_delta=lambda text: event_queue.put_nowait(("delta", text)),
+            on_started=lambda session_record, created: event_queue.put_nowait(
+                (
+                    "session.started",
+                    {
+                        "sessionId": session_record.session_id,
+                        "createdSession": created,
+                        "workDir": str(session_record.work_dir),
+                        "status": "running",
+                    },
+                )
+            ),
         )
-        await delta_queue.put(None)
+        await event_queue.put(None)
         await sender_task
         await websocket.send(
             json.dumps(
@@ -162,7 +173,7 @@ async def _handle_request(
             )
         )
     except Exception as exc:
-        await delta_queue.put(None)
+        await event_queue.put(None)
         await sender_task
         await websocket.send(
             json.dumps(
@@ -234,16 +245,25 @@ def _content_type(path: Path) -> str:
     return "text/plain"
 
 
-async def _send_deltas(
+async def _send_stream_events(
     websocket: WebSocketClientProtocol,
     request_id: str,
-    delta_queue: asyncio.Queue[str | None],
+    event_queue: asyncio.Queue[tuple[str, Any] | None],
 ) -> None:
     sequence = 1
     while True:
-        delta = await delta_queue.get()
-        if delta is None:
+        event = await event_queue.get()
+        if event is None:
             return
+        event_type, payload = event
+        if event_type == "session.started":
+            await websocket.send(
+                json.dumps(
+                    _message("session.started", request_id=request_id, payload=payload),
+                    ensure_ascii=False,
+                )
+            )
+            continue
         await websocket.send(
             json.dumps(
                 _message(
@@ -252,7 +272,7 @@ async def _send_deltas(
                     payload={
                         "role": "assistant",
                         "sequence": sequence,
-                        "text": delta,
+                        "text": payload,
                         "contentType": "text/markdown",
                     },
                 ),

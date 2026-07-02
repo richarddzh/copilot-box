@@ -16,6 +16,27 @@ data class BrokerWorker(
     override fun toString(): String = if (displayName == workerId) workerId else "$displayName ($workerId)"
 }
 
+data class ActiveSession(
+    val requestId: String,
+    val workerId: String,
+    val workDir: String,
+    val sessionId: String?,
+    val status: String,
+    val prompt: String,
+    val outputPreview: String,
+) {
+    override fun toString(): String {
+        val session = sessionId ?: requestId
+        val shortPrompt = prompt.replace("\n", " ").take(48)
+        return "$session - $shortPrompt"
+    }
+}
+
+data class SessionSnapshot(
+    val activeSession: ActiveSession,
+    val outputSoFar: String,
+)
+
 data class AgentFinal(
     val status: String,
     val sessionId: String?,
@@ -85,6 +106,21 @@ fun parseWorkers(payload: JSONObject): List<BrokerWorker> {
     }
 }
 
+fun parseActiveSessions(payload: JSONObject): List<ActiveSession> {
+    val sessions = payload.optJSONArray("activeSessions") ?: JSONArray()
+    return buildList {
+        for (index in 0 until sessions.length()) {
+            add(parseActiveSession(sessions.getJSONObject(index)))
+        }
+    }
+}
+
+fun parseSessionSnapshot(payload: JSONObject): SessionSnapshot =
+    SessionSnapshot(
+        activeSession = parseActiveSession(payload.getJSONObject("activeSession")),
+        outputSoFar = payload.optString("outputSoFar"),
+    )
+
 fun clientHelloJson(): String =
     JSONObject()
         .put("type", "client.hello")
@@ -100,19 +136,12 @@ fun clientHelloJson(): String =
         )
         .toString()
 
-private fun JSONObject.optionalString(name: String): String? {
-    if (!has(name) || isNull(name)) {
-        return null
-    }
-    val value = optString(name).trim()
-    return value.ifBlank { null }
-}
-
 fun agentRequestJson(
     requestId: String,
     workerId: String,
     workDir: String,
     sessionMode: String,
+    sessionId: String?,
     prompt: String,
 ): String =
     JSONObject()
@@ -130,7 +159,7 @@ fun agentRequestJson(
                     "session",
                     JSONObject()
                         .put("mode", sessionMode)
-                        .put("sessionId", JSONObject.NULL),
+                        .put("sessionId", sessionId ?: JSONObject.NULL),
                 )
                 .put(
                     "agent",
@@ -139,6 +168,21 @@ fun agentRequestJson(
                         .put("model", JSONObject.NULL)
                         .put("timeoutSeconds", 120),
                 ),
+        )
+        .toString()
+
+fun sessionJoinJson(joinRequestId: String, workerId: String, activeRequestId: String): String =
+    JSONObject()
+        .put("type", "session.join")
+        .put("protocolVersion", PROTOCOL_VERSION)
+        .put("messageId", "msg-${UUID.randomUUID()}")
+        .put("requestId", joinRequestId)
+        .put("timestamp", Instant.now().toString())
+        .put(
+            "payload",
+            JSONObject()
+                .put("workerId", workerId)
+                .put("requestId", activeRequestId),
         )
         .toString()
 
@@ -156,3 +200,22 @@ fun reportReadJson(requestId: String, workerId: String, path: String): String =
                 .put("path", path),
         )
         .toString()
+
+private fun parseActiveSession(obj: JSONObject): ActiveSession =
+    ActiveSession(
+        requestId = obj.getString("requestId"),
+        workerId = obj.getString("workerId"),
+        workDir = obj.getString("workDir"),
+        sessionId = obj.optionalString("sessionId"),
+        status = obj.optString("status"),
+        prompt = obj.optString("prompt"),
+        outputPreview = obj.optString("outputPreview"),
+    )
+
+private fun JSONObject.optionalString(name: String): String? {
+    if (!has(name) || isNull(name)) {
+        return null
+    }
+    val value = optString(name).trim()
+    return value.ifBlank { null }
+}

@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-Broker 是部署在 Azure Web App 上的 Python FastAPI 服务。Android client 和 Windows backend worker 都主动连接 broker WebSocket；broker 不运行 Copilot agent，也不访问 backend 文件系统，只负责认证、连接管理和消息转发。
+Broker 是部署在 Azure Web App 上的 Python FastAPI 服务。Android client 和 Windows backend worker 都主动连接 broker WebSocket；broker 不运行 Copilot agent，也不访问 backend 文件系统，只负责认证、连接管理、active session 状态跟踪和消息转发。
 
 Endpoint：
 
@@ -78,3 +78,9 @@ Workflow：`.github\workflows\broker.yml`。
 | `AZURE_BROKER_PUBLISH_PROFILE` | GitHub Actions secret | Azure Web App publish profile XML |
 
 Workflow 会运行 broker WebSocket 测试，并部署 `broker/` 目录。
+
+## 5. Active session 发现与加入
+
+Broker 为每个 running `agent.request` 维护一条 active session 记录，记录 `requestId`、`workerId`、`workDir`、`sessionId`、原始 prompt、已收到的输出和订阅 client。新 Android client 连接并发送 `client.hello` 后，`broker.hello.payload.activeSessions` 会返回当前 running sessions。
+
+客户端发送 `session.join` 后，broker 返回 `session.snapshot`，其中包含原始 prompt 和 `outputSoFar`，并把该 client 加入订阅者集合。之后该 request 的 `session.started`、`agent.delta`、`agent.final` 和 `error` 会广播给原始 client 与所有 joined clients。`agent.final` 或 `error` 后 active session 会从 broker 状态中移除；历史 completed session 不在 broker 中持久保存。
