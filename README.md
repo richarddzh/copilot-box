@@ -8,6 +8,12 @@ HTML 文档站点使用 Sphinx 构建，入口见 [`docs\index.md`](docs\index.m
 
 Android 客户端项目位于 [`android`](android)，使用文档见 [`docs\android.md`](docs\android.md)。
 
+本地无 Android Studio 的 CLI 构建入口：
+
+```powershell
+.\android\scripts\build-debug.ps1
+```
+
 ## 本地运行
 
 ```powershell
@@ -74,3 +80,5 @@ python -m copilot_box service run --config .\config\copilot-box.example.toml
 ```
 
 推送到 GitHub 默认分支后，`.github\workflows\docs.yml` 会构建并发布到 GitHub Pages。
+
+Android APK 由 `.github\workflows\android.yml` 构建；推送 `v*` 或 `android-v*` tag 时会创建 GitHub Release，并上传可安装的 debug APK。

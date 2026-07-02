@@ -4,7 +4,9 @@ import android.app.Activity
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -42,42 +44,102 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 32, 32, 32)
         }
-        requestSasUrl = input("Requests container SAS URL", preferences.getString("requestSasUrl", "").orEmpty())
-        responseSasUrl = input("Responses container SAS URL", preferences.getString("responseSasUrl", "").orEmpty())
-        requestPrefix = input("Request prefix", preferences.getString("requestPrefix", "manual-test/android/").orEmpty())
-        workDir = input("Remote work dir", preferences.getString("workDir", "Q:\\gitroot\\copilot-box").orEmpty())
-        sessionMode = input("Session mode: auto, new, continue", preferences.getString("sessionMode", "auto").orEmpty())
-        sessionId = input("Session id (optional)", preferences.getString("sessionId", "").orEmpty())
-        prompt = input("Prompt", preferences.getString("prompt", "请只回复 pong，不要修改文件").orEmpty())
+        requestSasUrl = input(
+            "Requests container SAS URL",
+            "https://<account>.blob.core.windows.net/requests?<sas>",
+            preferences.getString("requestSasUrl", "").orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+        )
+        responseSasUrl = input(
+            "Responses container SAS URL",
+            "https://<account>.blob.core.windows.net/responses?<sas>",
+            preferences.getString("responseSasUrl", "").orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+        )
+        requestPrefix = input(
+            "Request prefix",
+            "manual-test/android/",
+            preferences.getString("requestPrefix", "manual-test/android/").orEmpty(),
+        )
+        workDir = input(
+            "Remote work dir",
+            "Q:\\gitroot\\copilot-box",
+            preferences.getString("workDir", "Q:\\gitroot\\copilot-box").orEmpty(),
+        )
+        sessionMode = input(
+            "Session mode",
+            "auto, new, or continue",
+            preferences.getString("sessionMode", "auto").orEmpty(),
+        )
+        sessionId = input(
+            "Session id (optional)",
+            "sess_xxx",
+            preferences.getString("sessionId", "").orEmpty(),
+        )
+        prompt = input(
+            "Prompt",
+            "请只回复 pong，不要修改文件",
+            preferences.getString("prompt", "请只回复 pong，不要修改文件").orEmpty(),
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
+            minLines = 4,
+        )
         output = TextView(this).apply {
             text = "Ready"
             setTextIsSelectable(true)
+            textSize = 16f
         }
         val sendButton = Button(this).apply {
             text = "Send request"
             setOnClickListener { sendRequest() }
         }
 
-        listOf(
-            requestSasUrl,
-            responseSasUrl,
-            requestPrefix,
-            workDir,
-            sessionMode,
-            sessionId,
-            prompt,
-            sendButton,
-            output,
-        ).forEach { container.addView(it) }
+        addField(container, "Requests container SAS URL", requestSasUrl)
+        addField(container, "Responses container SAS URL", responseSasUrl)
+        addField(container, "Request prefix", requestPrefix)
+        addField(container, "Remote work dir", workDir)
+        addField(container, "Session mode", sessionMode)
+        addField(container, "Session id (optional)", sessionId)
+        addField(container, "Prompt", prompt)
+        container.addView(sendButton)
+        container.addView(output)
 
         return ScrollView(this).apply { addView(container) }
     }
 
-    private fun input(hint: String, value: String): EditText =
+    private fun addField(container: LinearLayout, label: String, editText: EditText) {
+        container.addView(
+            TextView(this).apply {
+                text = label
+                textSize = 14f
+                setPadding(0, 18, 0, 4)
+            },
+        )
+        container.addView(editText)
+    }
+
+    private fun input(
+        label: String,
+        hint: String,
+        value: String,
+        inputType: Int = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+        minLines: Int = 1,
+    ): EditText =
         EditText(this).apply {
             this.hint = hint
             setText(value)
-            minLines = if (hint == "Prompt") 4 else 1
+            this.inputType = inputType
+            this.minLines = minLines
+            isSingleLine = minLines == 1
+            isFocusable = true
+            isFocusableInTouchMode = true
+            textSize = 16f
+            setSelectAllOnFocus(false)
+            setOnClickListener {
+                requestFocus()
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            }
+            contentDescription = label
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
