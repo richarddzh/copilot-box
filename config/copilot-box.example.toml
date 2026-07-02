@@ -1,0 +1,34 @@
+[storage]
+account_url = "https://<account>.blob.core.windows.net"
+request_container = "requests"
+response_container = "responses"
+dead_letter_container = "dead-letter"
+poll_interval_seconds = 5
+
+[identity]
+mode = "managed_identity"
+
+[sessions]
+state_dir = "C:\\ProgramData\\copilot-box\\state"
+ttl_seconds = 86400
+max_concurrent_requests = 1
+
+[workdirs]
+allowed_roots = [
+  "Q:\\gitroot"
+]
+
+[agent]
+adapter = "github_copilot_sdk"
+# Empty means let Copilot choose the account/runtime default model.
+model = ""
+timeout_seconds = 120
+approve_all_tool_requests = true
+base_directory = "C:\\ProgramData\\copilot-box\\copilot-home"
+
+[reports]
+enabled = true
+repo = "owner/copilot-box-reports"
+branch = "main"
+base_path = "reports"
+static_web_app_base_url = "https://<app>.azurestaticapps.net"

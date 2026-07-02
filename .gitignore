@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+docs/_build/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local runtime state
+.service/
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Local configuration
+config\copilot-box.local.toml
+
+# Editors
+.vscode/
+.idea/
