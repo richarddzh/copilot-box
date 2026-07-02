@@ -6,6 +6,8 @@
 
 HTML 文档站点使用 Sphinx 构建，入口见 [`docs\index.md`](docs\index.md)。
 
+Android 客户端项目位于 [`android`](android)，使用文档见 [`docs\android.md`](docs\android.md)。
+
 ## 本地运行
 
 ```powershell

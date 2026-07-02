@@ -13,6 +13,7 @@ copyright = f"{datetime.now(UTC).year}, {author}"
 
 extensions = [
     "myst_parser",
+    "sphinx_rtd_theme",
 ]
 
 source_suffix = {
@@ -22,8 +23,12 @@ source_suffix = {
 
 master_doc = "index"
 language = "zh_CN"
-html_theme = "alabaster"
+html_theme = "sphinx_rtd_theme"
 html_title = "copilot-box 文档"
+html_theme_options = {
+    "collapse_navigation": False,
+    "navigation_depth": 4,
+}
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 myst_heading_anchors = 3
