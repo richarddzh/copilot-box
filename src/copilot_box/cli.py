@@ -7,9 +7,8 @@ from pathlib import Path
 
 from copilot_box import __version__
 from copilot_box.agent import AgentService, PromptRequest
-from copilot_box.blob_storage import AzureBlobStorage
 from copilot_box.config import load_settings
-from copilot_box.requests import StorageRequestProcessor
+from copilot_box.ws_worker import run_worker
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,14 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", required=True, type=Path, help="Path to the TOML config file."
     )
     run_parser.add_argument(
-        "--max-iterations",
+        "--max-requests",
         type=int,
-        help="Stop after this many polling iterations. Omit for normal long-running service mode.",
-    )
-
-    once_parser = service_subparsers.add_parser("once", help="Process one polling iteration.")
-    once_parser.add_argument(
-        "--config", required=True, type=Path, help="Path to the TOML config file."
+        help="Stop after this many WebSocket requests. Omit for normal long-running service mode.",
     )
 
     prompt_parser = service_subparsers.add_parser(
@@ -93,13 +87,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(result.output)
             return 0
 
-        if args.service_command == "once":
-            results = asyncio.run(_run_once(args))
-            print(json.dumps([result.__dict__ for result in results], ensure_ascii=False))
-            return 0
-
         if args.service_command == "run":
-            asyncio.run(_run_loop(args))
+            asyncio.run(_run_worker(args))
             return 0
 
     parser.print_help()
@@ -121,27 +110,6 @@ async def _run_prompt(args: argparse.Namespace):
     )
 
 
-async def _run_once(args: argparse.Namespace):
+async def _run_worker(args: argparse.Namespace) -> None:
     settings = load_settings(args.config)
-    processor = StorageRequestProcessor(
-        settings=settings,
-        blob_storage=AzureBlobStorage(settings.storage),
-    )
-    return await processor.process_once()
-
-
-async def _run_loop(args: argparse.Namespace) -> None:
-    settings = load_settings(args.config)
-    processor = StorageRequestProcessor(
-        settings=settings,
-        blob_storage=AzureBlobStorage(settings.storage),
-    )
-    iterations = 0
-    while True:
-        results = await processor.process_once()
-        if results:
-            print(json.dumps([result.__dict__ for result in results], ensure_ascii=False))
-        iterations += 1
-        if args.max_iterations is not None and iterations >= args.max_iterations:
-            return
-        await asyncio.sleep(settings.storage.poll_interval_seconds)
+    await run_worker(settings=settings, max_requests=args.max_requests)

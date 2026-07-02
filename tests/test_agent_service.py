@@ -7,8 +7,9 @@ from copilot_box.agent import AgentService, EchoAgentAdapter, PromptRequest
 from copilot_box.config import (
     AgentSettings,
     AppSettings,
+    BrokerClientSettings,
+    ReportSettings,
     SessionSettings,
-    StorageSettings,
     WorkDirSettings,
 )
 
@@ -16,11 +17,14 @@ from copilot_box.config import (
 def make_settings(tmp_path: Path) -> AppSettings:
     root = tmp_path / "work"
     root.mkdir()
+    repo = root / "repo"
+    repo.mkdir()
     return AppSettings(
-        storage=StorageSettings(account_url="https://example.blob.core.windows.net"),
+        broker=BrokerClientSettings(),
         sessions=SessionSettings(state_dir=tmp_path / "state", ttl_seconds=86400),
-        workdirs=WorkDirSettings(allowed_roots=(root,)),
+        workdirs=WorkDirSettings(allowed=(repo,)),
         agent=AgentSettings(adapter="echo", model=None, base_directory=tmp_path / "copilot-home"),
+        reports=ReportSettings(),
     )
 
 
@@ -30,8 +34,7 @@ def test_agent_service_creates_and_continues_session(tmp_path: Path) -> None:
 
 async def _run_agent_service_creates_and_continues_session(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    work_dir = settings.workdirs.allowed_roots[0] / "repo"
-    work_dir.mkdir()
+    work_dir = settings.workdirs.allowed[0]
     service = AgentService(settings=settings, adapter=EchoAgentAdapter())
 
     first = await service.handle_prompt(PromptRequest(prompt="hello", work_dir=work_dir))

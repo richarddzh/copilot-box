@@ -12,11 +12,10 @@ authors = [
   { name = "Copilot Box Maintainers" }
 ]
 dependencies = [
-  "azure-identity>=1.17.1",
-  "azure-storage-blob>=12.21.0",
   "github-copilot-sdk>=1.0.5,<2",
   "pydantic>=2.8.0",
-  "pydantic-settings>=2.3.0"
+  "pydantic-settings>=2.3.0",
+  "websockets>=12"
 ]
 
 [project.optional-dependencies]
@@ -32,12 +31,16 @@ docs = [
   "sphinx>=8.1",
   "sphinx-rtd-theme>=3.0"
 ]
+broker = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30"
+]
 
 [project.scripts]
 copilot-box = "copilot_box.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/copilot_box"]
+packages = ["src/copilot_box", "broker/copilot_box_broker"]
 
 [tool.ruff]
 line-length = 100

@@ -1,23 +1,20 @@
-[storage]
-account_url = "https://<account>.blob.core.windows.net"
-request_container = "requests"
-response_container = "responses"
-dead_letter_container = "dead-letter"
-request_prefix = ""
-poll_interval_seconds = 5
-max_requests_per_poll = 10
-
-[identity]
-mode = "managed_identity"
+[broker]
+url = "wss://<broker-app>.azurewebsites.net/ws/worker"
+worker_id = "worker-home-pc"
+worker_token = "<worker-shared-token>"
+display_name = "Home PC"
+reconnect_seconds = 5
+heartbeat_seconds = 30
 
 [sessions]
 state_dir = "C:\\ProgramData\\copilot-box\\state"
 ttl_seconds = 86400
 max_concurrent_requests = 1
+single_active_session = true
 
 [workdirs]
-allowed_roots = [
-  "Q:\\gitroot"
+allowed = [
+  "Q:\\gitroot\\copilot-box"
 ]
 
 [agent]
@@ -30,7 +27,5 @@ base_directory = "C:\\ProgramData\\copilot-box\\copilot-home"
 
 [reports]
 enabled = true
-repo = "owner/copilot-box-reports"
-branch = "main"
-base_path = "reports"
-static_web_app_base_url = "https://<app>.azurestaticapps.net"
+root_dir = "Q:\\copilot-box-reports"
+max_file_bytes = 1048576

@@ -35,12 +35,10 @@ class SessionStore:
 
     def resolve_work_dir(self, work_dir: Path) -> Path:
         resolved = work_dir.expanduser().resolve(strict=False)
-        if not any(
-            _is_relative_to(resolved, root) for root in self._settings.workdirs.allowed_roots
-        ):
-            allowed = ", ".join(str(root) for root in self._settings.workdirs.allowed_roots)
+        if not any(_same_path(resolved, allowed) for allowed in self._settings.workdirs.allowed):
+            allowed = ", ".join(str(path) for path in self._settings.workdirs.allowed)
             raise WorkDirNotAllowedError(
-                f"work dir is outside allowed roots: {resolved}; allowed: {allowed}"
+                f"work dir is not in the configured whitelist: {resolved}; allowed: {allowed}"
             )
         return resolved
 
@@ -191,12 +189,8 @@ def _record_from_row(row: tuple[str, str, str, str, str]) -> SessionRecord:
     )
 
 
-def _is_relative_to(path: Path, root: Path) -> bool:
-    normalized_path = _normalize_path(path)
-    normalized_root = _normalize_path(root)
-    return normalized_path == normalized_root or normalized_path.startswith(
-        normalized_root + os.sep
-    )
+def _same_path(left: Path, right: Path) -> bool:
+    return _normalize_path(left) == _normalize_path(right)
 
 
 def _normalize_path(path: Path) -> str:

@@ -7,14 +7,13 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class StorageSettings:
-    account_url: str
-    request_container: str = "requests"
-    response_container: str = "responses"
-    dead_letter_container: str = "dead-letter"
-    request_prefix: str = ""
-    poll_interval_seconds: float = 5
-    max_requests_per_poll: int = 10
+class BrokerClientSettings:
+    url: str = ""
+    worker_id: str = ""
+    worker_token: str = ""
+    display_name: str = ""
+    reconnect_seconds: float = 5
+    heartbeat_seconds: float = 30
 
 
 @dataclass(frozen=True)
@@ -22,11 +21,12 @@ class SessionSettings:
     state_dir: Path
     ttl_seconds: int = 86400
     max_concurrent_requests: int = 1
+    single_active_session: bool = True
 
 
 @dataclass(frozen=True)
 class WorkDirSettings:
-    allowed_roots: tuple[Path, ...]
+    allowed: tuple[Path, ...]
 
 
 @dataclass(frozen=True)
@@ -39,11 +39,19 @@ class AgentSettings:
 
 
 @dataclass(frozen=True)
+class ReportSettings:
+    enabled: bool = False
+    root_dir: Path | None = None
+    max_file_bytes: int = 1048576
+
+
+@dataclass(frozen=True)
 class AppSettings:
-    storage: StorageSettings
+    broker: BrokerClientSettings
     sessions: SessionSettings
     workdirs: WorkDirSettings
     agent: AgentSettings
+    reports: ReportSettings
 
 
 def load_settings(path: Path) -> AppSettings:
@@ -51,18 +59,19 @@ def load_settings(path: Path) -> AppSettings:
     raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     base_dir = config_path.parent
 
-    storage = raw.get("storage", {})
+    broker = raw.get("broker", {})
     sessions = raw.get("sessions", {})
     workdirs = raw.get("workdirs", {})
     agent = raw.get("agent", {})
+    reports = raw.get("reports", {})
 
     state_dir = _path_from_config(sessions.get("state_dir"), base_dir, "sessions.state_dir")
-    allowed_roots = tuple(
-        _path_from_config(value, base_dir, "workdirs.allowed_roots")
-        for value in workdirs.get("allowed_roots", [])
+    allowed_workdirs = tuple(
+        _path_from_config(value, base_dir, "workdirs.allowed")
+        for value in workdirs.get("allowed", [])
     )
-    if not allowed_roots:
-        raise ValueError("workdirs.allowed_roots must contain at least one path")
+    if not allowed_workdirs:
+        raise ValueError("workdirs.allowed must contain at least one path")
 
     base_directory_value = agent.get("base_directory")
     base_directory = (
@@ -72,27 +81,36 @@ def load_settings(path: Path) -> AppSettings:
     )
 
     return AppSettings(
-        storage=StorageSettings(
-            account_url=str(storage.get("account_url", "")).strip(),
-            request_container=str(storage.get("request_container", "requests")),
-            response_container=str(storage.get("response_container", "responses")),
-            dead_letter_container=str(storage.get("dead_letter_container", "dead-letter")),
-            request_prefix=str(storage.get("request_prefix", "")),
-            poll_interval_seconds=float(storage.get("poll_interval_seconds", 5)),
-            max_requests_per_poll=int(storage.get("max_requests_per_poll", 10)),
+        broker=BrokerClientSettings(
+            url=str(broker.get("url", "")).strip(),
+            worker_id=str(broker.get("worker_id", "")).strip(),
+            worker_token=str(broker.get("worker_token", "")).strip(),
+            display_name=str(broker.get("display_name", "")).strip(),
+            reconnect_seconds=float(broker.get("reconnect_seconds", 5)),
+            heartbeat_seconds=float(broker.get("heartbeat_seconds", 30)),
         ),
         sessions=SessionSettings(
             state_dir=state_dir,
             ttl_seconds=int(sessions.get("ttl_seconds", 86400)),
             max_concurrent_requests=int(sessions.get("max_concurrent_requests", 1)),
+            single_active_session=bool(sessions.get("single_active_session", True)),
         ),
-        workdirs=WorkDirSettings(allowed_roots=allowed_roots),
+        workdirs=WorkDirSettings(allowed=allowed_workdirs),
         agent=AgentSettings(
             adapter=str(agent.get("adapter", "github_copilot_sdk")),
             model=_optional_str(agent.get("model", "gpt-5")),
             timeout_seconds=float(agent.get("timeout_seconds", 120)),
             approve_all_tool_requests=bool(agent.get("approve_all_tool_requests", True)),
             base_directory=base_directory,
+        ),
+        reports=ReportSettings(
+            enabled=bool(reports.get("enabled", False)),
+            root_dir=(
+                _path_from_config(reports.get("root_dir"), base_dir, "reports.root_dir")
+                if reports.get("root_dir")
+                else None
+            ),
+            max_file_bytes=int(reports.get("max_file_bytes", 1048576)),
         ),
     )
 

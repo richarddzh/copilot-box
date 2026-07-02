@@ -7,8 +7,9 @@ import pytest
 from copilot_box.config import (
     AgentSettings,
     AppSettings,
+    BrokerClientSettings,
+    ReportSettings,
     SessionSettings,
-    StorageSettings,
     WorkDirSettings,
 )
 from copilot_box.sessions import SessionStore, WorkDirNotAllowedError
@@ -17,18 +18,22 @@ from copilot_box.sessions import SessionStore, WorkDirNotAllowedError
 def make_settings(tmp_path: Path) -> AppSettings:
     root = tmp_path / "work"
     root.mkdir()
+    repo = root / "repo"
+    repo.mkdir()
+    other = root / "other"
+    other.mkdir()
     return AppSettings(
-        storage=StorageSettings(account_url="https://example.blob.core.windows.net"),
+        broker=BrokerClientSettings(),
         sessions=SessionSettings(state_dir=tmp_path / "state", ttl_seconds=86400),
-        workdirs=WorkDirSettings(allowed_roots=(root,)),
+        workdirs=WorkDirSettings(allowed=(repo, other)),
         agent=AgentSettings(adapter="echo", base_directory=tmp_path / "copilot-home"),
+        reports=ReportSettings(),
     )
 
 
 def test_auto_reuses_latest_session_for_same_work_dir(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    work_dir = settings.workdirs.allowed_roots[0] / "repo"
-    work_dir.mkdir()
+    work_dir = settings.workdirs.allowed[0]
     store = SessionStore(settings)
 
     first, created_first = store.select_session(mode="auto", work_dir=work_dir)
@@ -41,10 +46,8 @@ def test_auto_reuses_latest_session_for_same_work_dir(tmp_path: Path) -> None:
 
 def test_continue_requires_existing_session_in_same_work_dir(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    work_dir = settings.workdirs.allowed_roots[0] / "repo"
-    other_dir = settings.workdirs.allowed_roots[0] / "other"
-    work_dir.mkdir()
-    other_dir.mkdir()
+    work_dir = settings.workdirs.allowed[0]
+    other_dir = settings.workdirs.allowed[1]
     store = SessionStore(settings)
     record, _ = store.select_session(mode="new", work_dir=work_dir)
 
@@ -54,7 +57,7 @@ def test_continue_requires_existing_session_in_same_work_dir(tmp_path: Path) -> 
         )
 
 
-def test_rejects_work_dir_outside_allowed_roots(tmp_path: Path) -> None:
+def test_rejects_work_dir_outside_whitelist(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = SessionStore(settings)
 

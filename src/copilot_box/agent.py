@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -34,6 +35,7 @@ class AgentAdapter(Protocol):
         prompt: str,
         timeout_seconds: float,
         model: str | None,
+        on_delta: Callable[[str], None] | None = None,
     ) -> str:
         pass
 
@@ -49,6 +51,7 @@ class CopilotSdkAgentAdapter:
         prompt: str,
         timeout_seconds: float,
         model: str | None,
+        on_delta: Callable[[str], None] | None = None,
     ) -> str:
         from copilot import CopilotClient, PermissionHandler
         from copilot.session_events import (
@@ -71,6 +74,8 @@ class CopilotSdkAgentAdapter:
             match data:
                 case AssistantMessageDeltaData() as delta:
                     chunks.append(delta.delta_content)
+                    if on_delta is not None:
+                        on_delta(delta.delta_content)
                 case AssistantMessageData() as message:
                     final_message = message.content
                 case SessionErrorData() as error:
@@ -124,9 +129,13 @@ class EchoAgentAdapter:
         prompt: str,
         timeout_seconds: float,
         model: str | None,
+        on_delta: Callable[[str], None] | None = None,
     ) -> str:
         del timeout_seconds, model
-        return f"[echo:{session.session_id}] {prompt}"
+        output = f"[echo:{session.session_id}] {prompt}"
+        if on_delta is not None:
+            on_delta(output)
+        return output
 
 
 class AgentService:
@@ -141,7 +150,12 @@ class AgentService:
         self._session_store = session_store or SessionStore(settings)
         self._adapter = adapter or _build_adapter(settings)
 
-    async def handle_prompt(self, request: PromptRequest) -> PromptResult:
+    async def handle_prompt(
+        self,
+        request: PromptRequest,
+        *,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> PromptResult:
         session, created = self._session_store.select_session(
             mode=request.session_mode,
             work_dir=request.work_dir,
@@ -152,6 +166,7 @@ class AgentService:
             prompt=request.prompt,
             timeout_seconds=request.timeout_seconds or self._settings.agent.timeout_seconds,
             model=request.model if request.model is not None else self._settings.agent.model,
+            on_delta=on_delta,
         )
         self._session_store.touch(session.session_id)
         return PromptResult(

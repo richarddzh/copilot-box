@@ -1,0 +1,60 @@
+name: Deploy Broker
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/broker.yml"
+      - "broker/**"
+      - "pyproject.toml"
+      - "tests/test_broker.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[broker,dev]"
+
+      - name: Run broker tests
+        run: python -m pytest tests/test_broker.py -q
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Prepare deployment package
+        run: |
+          python -m pip install --target broker/.python_packages/lib/site-packages -r broker/requirements.txt
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_BROKER_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_BROKER_PUBLISH_PROFILE }}
+          package: broker
